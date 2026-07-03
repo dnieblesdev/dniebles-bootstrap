@@ -4,11 +4,11 @@
 
 ## Current status
 
-This repository is in the design/specification stage. The current SDD change defines the architecture, specs, and operating documentation only.
+This repository has its first pure Go planning-core slice. It accepts decoded domain inputs and builds deterministic plans without TOML loading, CLI/TUI wiring, installers, command execution, dotfiles runtime integration, or real environment probing.
 
-- No Go application code exists yet.
+- Go application code is currently limited to `internal/planning` domain/value types, a pure plan builder, and table-driven unit tests.
 - No runtime catalog implementation exists yet.
-- The accepted direction is captured under `openspec/changes/design-bootstrap-orchestrator/`.
+- The accepted direction is captured under `openspec/changes/archive/2026-07-03-design-bootstrap-orchestrator/` and the active `openspec/changes/first-go-planning-slice/` change.
 
 ## Goals and non-goals
 
