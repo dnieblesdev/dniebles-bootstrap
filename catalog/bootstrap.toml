@@ -1,0 +1,29 @@
+schema = "dniebles.catalog"
+version = 1
+
+[[tools]]
+id = "git"
+description = "Version control"
+os = ["linux", "darwin"]
+
+[[runtimes]]
+id = "go"
+description = "Go toolchain"
+depends_on = ["tool:git"]
+config_required = ["go.env"]
+os = ["linux", "darwin"]
+arch = ["amd64", "arm64"]
+
+[[packages]]
+id = "ripgrep"
+description = "Fast text search"
+depends_on = ["tool:git"]
+
+[[bundles]]
+id = "cli"
+resources = ["tool:git", "package:ripgrep"]
+
+[[profiles]]
+id = "dev"
+bundles = ["cli"]
+resources = ["runtime:go"]

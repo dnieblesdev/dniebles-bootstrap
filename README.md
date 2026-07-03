@@ -4,11 +4,11 @@
 
 ## Current status
 
-This repository has its first pure Go planning-core slice. It accepts decoded domain inputs and builds deterministic plans without TOML loading, CLI/TUI wiring, installers, command execution, dotfiles runtime integration, or real environment probing.
+This repository has its first pure Go planning-core slice plus an isolated TOML catalog adapter. It accepts decoded domain inputs and builds deterministic plans without CLI/TUI wiring, installers, command execution, dotfiles runtime integration, or real environment probing.
 
-- Go application code is currently limited to `internal/planning` domain/value types, a pure plan builder, and table-driven unit tests.
-- No runtime catalog implementation exists yet.
-- The accepted direction is captured under `openspec/changes/archive/2026-07-03-design-bootstrap-orchestrator/` and the active `openspec/changes/first-go-planning-slice/` change.
+- Go application code currently includes `internal/planning` domain/value types, a pure plan builder, the `internal/catalog/toml` adapter, and table-driven unit/integration tests.
+- A repository-local TOML catalog fixture exists at `catalog/bootstrap.toml`; it decodes into planning inputs while planner-owned semantics remain in `internal/planning`.
+- The accepted direction is captured under `openspec/changes/archive/2026-07-03-design-bootstrap-orchestrator/`, `openspec/changes/first-go-planning-slice/`, and `openspec/changes/catalog-toml-adapter/`.
 
 ## Goals and non-goals
 
@@ -24,7 +24,7 @@ This repository has its first pure Go planning-core slice. It accepts decoded do
 |----------|----------|
 | Dotfiles internals | `~/.dotfiles` owns modules, configs, assets, symlinks, validations, and `dotlink` semantics. |
 | Shell orchestration | A shell wrapper may acquire `dbootstrap`, but it must not resolve catalogs, run installers, or own reporting. |
-| Runtime implementation in this slice | This change does not add Go code, installers, CLI commands, or catalog files. |
+| Runtime execution in this slice | This change does not add installers, CLI commands, command runners, or runtime OS probing. |
 
 ## Install flows
 
@@ -78,9 +78,9 @@ It must not own or duplicate dotfiles module internals, declarative profile sema
 
 ## Catalog direction
 
-The catalog belongs in this repository. TOML is the recommended first authoring format because it is readable and maps well to Go structs, but the domain model should remain format-agnostic and schema-versioned so the format can evolve later.
+The catalog belongs in this repository. TOML is the first implemented authoring format because it is readable and maps well to Go structs, but the domain model remains format-agnostic and schema-versioned so the format can evolve later.
 
-No catalog implementation files are part of the current documentation/spec-only slice.
+The TOML adapter lives in `internal/catalog/toml`, and the initial fixture lives in `catalog/bootstrap.toml`. Adapter validation is intentionally shallow: TOML syntax, required fields, duplicate IDs, supported refs, and basic local references stay in the adapter; dependency expansion, environment filtering, missing config attention, and other planner semantics stay in `internal/planning`.
 
 ## Project guidance
 
