@@ -4,11 +4,21 @@
 
 ## Current status
 
-This repository has its first pure Go planning-core slice plus an isolated TOML catalog adapter. It accepts decoded domain inputs and builds deterministic plans without CLI/TUI wiring, installers, command execution, dotfiles runtime integration, or real environment probing.
+This repository has its first pure Go planning-core slice, an isolated TOML catalog adapter, and a minimal CLI plan command. It accepts decoded domain inputs and builds deterministic plans without installers, command execution, dotfiles runtime integration, TUI wiring, or real environment probing.
 
-- Go application code currently includes `internal/planning` domain/value types, a pure plan builder, the `internal/catalog/toml` adapter, and table-driven unit/integration tests.
+- Go application code currently includes `internal/planning` domain/value types, a pure plan builder, the `internal/catalog/toml` adapter, `cmd/dbootstrap` plan command wiring, and table-driven unit/integration tests.
 - A repository-local TOML catalog fixture exists at `catalog/bootstrap.toml`; it decodes into planning inputs while planner-owned semantics remain in `internal/planning`.
 - The accepted direction is captured under `openspec/changes/archive/2026-07-03-design-bootstrap-orchestrator/`, `openspec/changes/first-go-planning-slice/`, and `openspec/changes/catalog-toml-adapter/`.
+
+## CLI usage
+
+Build or run the current CLI from the repository root:
+
+```sh
+go run ./cmd/dbootstrap plan --profile dev
+```
+
+The command loads `catalog/bootstrap.toml` by default. Use `--catalog <path>` to point at another local TOML catalog file. This slice only plans with static environment facts (`linux/amd64`) and empty configuration state; it does not probe the host or apply/install anything.
 
 ## Goals and non-goals
 
