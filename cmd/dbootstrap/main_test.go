@@ -16,6 +16,7 @@ func TestRunPlanCommand(t *testing.T) {
 		args              []string
 		installationState planning.InstallationState
 		configState       planning.ConfigState
+		dotfilesState     planning.InstallationState
 		wantCode          int
 		wantStdout        string
 		wantStderr        string
@@ -110,11 +111,96 @@ func TestRunPlanCommand(t *testing.T) {
 			wantStderr: "",
 		},
 		{
-			name:       "missing profile is a stable usage error",
+			name:       "missing target is a stable usage error",
 			args:       []string{"plan"},
 			wantCode:   exitUsage,
 			wantStdout: "",
-			wantStderr: "Usage: dbootstrap plan --profile <name> [--catalog <path>]\nerror: --profile is required\n",
+			wantStderr: "Usage: dbootstrap plan [--profile <name>] [--resource <kind:name>] [--catalog <path>]\nerror: --profile or --resource is required\n",
+		},
+		{
+			name:              "resource only plans explicit resource",
+			args:              []string{"plan", "--resource", "tool:git", "--catalog", "../../catalog/bootstrap.toml"},
+			installationState: planning.InstallationState{},
+			configState:       planning.ConfigState{},
+			wantCode:          exitSuccess,
+			wantStdout: "Plan resources: tool:git\n" +
+				"Catalog: ../../catalog/bootstrap.toml\n" +
+				"Environment: os=linux arch=amd64 distro=test-distro wsl=true\n" +
+				"\n" +
+				"Steps:\n" +
+				"1. tool:git [planned] Version control\n" +
+				"   depends_on: none\n" +
+				"   attention: none\n" +
+				"\n" +
+				"Results:\n" +
+				"- tool:git: planned\n",
+			wantStderr: "",
+		},
+		{
+			name:              "profile and resource union",
+			args:              []string{"plan", "--profile", "dev", "--resource", "dotfile:bash", "--catalog", "../../catalog/bootstrap.toml"},
+			installationState: planning.InstallationState{},
+			configState:       planning.ConfigState{},
+			dotfilesState:     planning.InstallationState{},
+			wantCode:          exitSuccess,
+			wantStdout: "Plan profile: dev\n" +
+				"Catalog: ../../catalog/bootstrap.toml\n" +
+				"Environment: os=linux arch=amd64 distro=test-distro wsl=true\n" +
+				"\n" +
+				"Steps:\n" +
+				"1. dotfile:bash [planned] Bash dotfiles\n" +
+				"   depends_on: none\n" +
+				"   attention: none\n" +
+				"2. tool:git [planned] Version control\n" +
+				"   depends_on: none\n" +
+				"   attention: none\n" +
+				"3. package:ripgrep [planned] Fast text search\n" +
+				"   depends_on: tool:git\n" +
+				"   attention: none\n" +
+				"4. runtime:go [attention_required] Go toolchain\n" +
+				"   depends_on: tool:git\n" +
+				"   attention: missing required config \"go.env\"\n" +
+				"\n" +
+				"Results:\n" +
+				"- dotfile:bash: planned\n" +
+				"- package:ripgrep: planned\n" +
+				"- runtime:go: attention_required\n" +
+				"  reason: missing required config \"go.env\"\n" +
+				"- tool:git: planned\n",
+			wantStderr: "",
+		},
+		{
+			name:              "repeated resources are deduplicated",
+			args:              []string{"plan", "--resource", "tool:git", "--resource", "tool:git", "--catalog", "../../catalog/bootstrap.toml"},
+			installationState: planning.InstallationState{},
+			configState:       planning.ConfigState{},
+			wantCode:          exitSuccess,
+			wantStdout: "Plan resources: tool:git\n" +
+				"Catalog: ../../catalog/bootstrap.toml\n" +
+				"Environment: os=linux arch=amd64 distro=test-distro wsl=true\n" +
+				"\n" +
+				"Steps:\n" +
+				"1. tool:git [planned] Version control\n" +
+				"   depends_on: none\n" +
+				"   attention: none\n" +
+				"\n" +
+				"Results:\n" +
+				"- tool:git: planned\n",
+			wantStderr: "",
+		},
+		{
+			name:       "malformed resource ref is rejected",
+			args:       []string{"plan", "--resource", "git", "--catalog", "../../catalog/bootstrap.toml"},
+			wantCode:   exitUsage,
+			wantStdout: "",
+			wantStderr: "Usage: dbootstrap plan [--profile <name>] [--resource <kind:name>] [--catalog <path>]\nerror: invalid resource ref \"git\": expected kind:name\n",
+		},
+		{
+			name:       "unsupported resource kind is rejected",
+			args:       []string{"plan", "--resource", "service:git", "--catalog", "../../catalog/bootstrap.toml"},
+			wantCode:   exitUsage,
+			wantStdout: "",
+			wantStderr: "Usage: dbootstrap plan [--profile <name>] [--resource <kind:name>] [--catalog <path>]\nerror: unsupported resource kind \"service\" in ref \"service:git\"\n",
 		},
 		{
 			name:     "unknown profile exits with diagnostics",
@@ -141,6 +227,7 @@ func TestRunPlanCommand(t *testing.T) {
 			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64", Distro: "test-distro", WSL: true})
 			stubInstallationState(t, tt.installationState)
 			stubConfigState(t, tt.configState)
+			stubDotfilesState(t, tt.dotfilesState)
 
 			gotCode := run(tt.args, &stdout, &stderr)
 
@@ -152,6 +239,87 @@ func TestRunPlanCommand(t *testing.T) {
 			}
 			if got := stderr.String(); got != tt.wantStderr {
 				t.Fatalf("stderr = %q, want %q", got, tt.wantStderr)
+			}
+		})
+	}
+}
+
+func TestParseResourceRef(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     string
+		wantRef   planning.ResourceRef
+		wantError string
+	}{
+		{
+			name:    "tool ref",
+			value:   "tool:git",
+			wantRef: planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "git"},
+		},
+		{
+			name:    "runtime ref",
+			value:   "runtime:go",
+			wantRef: planning.ResourceRef{Kind: planning.ResourceKindRuntime, Name: "go"},
+		},
+		{
+			name:    "package ref",
+			value:   "package:ripgrep",
+			wantRef: planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "ripgrep"},
+		},
+		{
+			name:    "dotfile ref",
+			value:   "dotfile:bash",
+			wantRef: planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "bash"},
+		},
+		{
+			name:      "missing separator",
+			value:     "git",
+			wantError: `invalid resource ref "git": expected kind:name`,
+		},
+		{
+			name:      "missing kind",
+			value:     ":git",
+			wantError: `invalid resource ref ":git": expected kind:name`,
+		},
+		{
+			name:      "missing name",
+			value:     "tool:",
+			wantError: `invalid resource ref "tool:": expected kind:name`,
+		},
+		{
+			name:      "too many separators",
+			value:     "tool:git:extra",
+			wantError: `invalid resource ref "tool:git:extra": expected kind:name`,
+		},
+		{
+			name:      "unsupported kind",
+			value:     "service:git",
+			wantError: `unsupported resource kind "service" in ref "service:git"`,
+		},
+		{
+			name:      "empty value",
+			value:     "",
+			wantError: "resource ref is empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseResourceRef(tt.value)
+			if tt.wantError != "" {
+				if err == nil {
+					t.Fatalf("parseResourceRef(%q) = %v, want error", tt.value, got)
+				}
+				if err.Error() != tt.wantError {
+					t.Fatalf("parseResourceRef(%q) error = %q, want %q", tt.value, err.Error(), tt.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseResourceRef(%q) error = %v", tt.value, err)
+			}
+			if got != tt.wantRef {
+				t.Fatalf("parseResourceRef(%q) = %v, want %v", tt.value, got, tt.wantRef)
 			}
 		})
 	}

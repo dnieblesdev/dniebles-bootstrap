@@ -36,7 +36,7 @@ func TestRenderPlanResultIncludesSkippedAttentionAndDiagnostics(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	renderPlanResult(&stdout, "dev", "catalog/bootstrap.toml", planning.EnvironmentFacts{OS: "linux", Arch: "amd64"}, result)
+	renderPlanResult(&stdout, "dev", nil, "catalog/bootstrap.toml", planning.EnvironmentFacts{OS: "linux", Arch: "amd64"}, result)
 	renderDiagnostics(&stderr, result)
 
 	wantStdout := "Plan profile: dev\n" +
@@ -66,5 +66,39 @@ func TestRenderPlanResultIncludesSkippedAttentionAndDiagnostics(t *testing.T) {
 	wantStderr := "Diagnostics:\n- diagnostic: unknown bundle \"missing\"\n"
 	if got := stderr.String(); got != wantStderr {
 		t.Fatalf("stderr = %q, want %q", got, wantStderr)
+	}
+}
+
+func TestRenderPlanResultResourceOnlyHeader(t *testing.T) {
+	toolGit := planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "git"}
+
+	result := planning.PlanResult{
+		Plan: planning.Plan{Steps: []planning.PlanStep{
+			{
+				Ref:      toolGit,
+				Resource: planning.Resource{Ref: toolGit, Description: "Version control"},
+			},
+		}},
+		Results: []planning.PlanStepResult{
+			{Ref: toolGit, Status: planning.PlanStepStatusPlanned},
+		},
+	}
+
+	var stdout bytes.Buffer
+	renderPlanResult(&stdout, "", []planning.ResourceRef{toolGit}, "catalog/bootstrap.toml", planning.EnvironmentFacts{OS: "linux", Arch: "amd64"}, result)
+
+	wantStdout := "Plan resources: tool:git\n" +
+		"Catalog: catalog/bootstrap.toml\n" +
+		"Environment: os=linux arch=amd64 distro= wsl=false\n" +
+		"\n" +
+		"Steps:\n" +
+		"1. tool:git [planned] Version control\n" +
+		"   depends_on: none\n" +
+		"   attention: none\n" +
+		"\n" +
+		"Results:\n" +
+		"- tool:git: planned\n"
+	if got := stdout.String(); got != wantStdout {
+		t.Fatalf("stdout = %q, want %q", got, wantStdout)
 	}
 }

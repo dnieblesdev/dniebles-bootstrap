@@ -8,8 +8,12 @@ import (
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 )
 
-func renderPlanResult(w io.Writer, profile string, catalogPath string, facts planning.EnvironmentFacts, result planning.PlanResult) {
-	fmt.Fprintf(w, "Plan profile: %s\n", profile)
+func renderPlanResult(w io.Writer, profile string, resources []planning.ResourceRef, catalogPath string, facts planning.EnvironmentFacts, result planning.PlanResult) {
+	if profile != "" {
+		fmt.Fprintf(w, "Plan profile: %s\n", profile)
+	} else {
+		fmt.Fprintf(w, "Plan resources: %s\n", renderRefs(resources))
+	}
 	fmt.Fprintf(w, "Catalog: %s\n", catalogPath)
 	fmt.Fprintf(w, "Environment: os=%s arch=%s distro=%s wsl=%t\n", facts.OS, facts.Arch, facts.Distro, facts.WSL)
 	fmt.Fprintln(w)
