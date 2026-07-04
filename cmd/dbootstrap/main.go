@@ -79,6 +79,7 @@ func runPlan(args []string, stdout, stderr io.Writer) int {
 		planning.PlanRequest{Profile: *profile},
 		facts,
 		planning.ConfigState{},
+		planning.InstallationState{},
 	)
 
 	renderPlanResult(stdout, *profile, *catalogPath, facts, result)

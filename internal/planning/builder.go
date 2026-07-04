@@ -6,15 +6,16 @@ import (
 )
 
 // BuildPlan expands decoded domain inputs into a deterministic dependency-aware plan.
-func BuildPlan(catalog Catalog, request PlanRequest, facts EnvironmentFacts, state ConfigState) PlanResult {
+func BuildPlan(catalog Catalog, request PlanRequest, facts EnvironmentFacts, state ConfigState, installation InstallationState) PlanResult {
 	b := planBuilder{
-		catalog:   catalog,
-		facts:     facts,
-		state:     state,
-		selected:  map[ResourceRef]Resource{},
-		visiting:  map[string]bool{},
-		visited:   map[string]bool{},
-		resultFor: map[ResourceRef]PlanStepResult{},
+		catalog:      catalog,
+		facts:        facts,
+		state:        state,
+		installation: installation,
+		selected:     map[ResourceRef]Resource{},
+		visiting:     map[string]bool{},
+		visited:      map[string]bool{},
+		resultFor:    map[ResourceRef]PlanStepResult{},
 	}
 
 	b.expandRequest(request)
@@ -24,9 +25,10 @@ func BuildPlan(catalog Catalog, request PlanRequest, facts EnvironmentFacts, sta
 }
 
 type planBuilder struct {
-	catalog Catalog
-	facts   EnvironmentFacts
-	state   ConfigState
+	catalog      Catalog
+	facts        EnvironmentFacts
+	state        ConfigState
+	installation InstallationState
 
 	selected  map[ResourceRef]Resource
 	visiting  map[string]bool
@@ -108,7 +110,9 @@ func (b *planBuilder) appendOrderedSteps() {
 		resource := b.selected[ref]
 		reasons := missingConfigReasons(resource.ConfigPolicy, b.state)
 		status := PlanStepStatusPlanned
-		if len(reasons) > 0 {
+		if b.installation.PresentResources[ref] {
+			status = PlanStepStatusAlreadyInstalled
+		} else if len(reasons) > 0 {
 			status = PlanStepStatusAttentionRequired
 		}
 

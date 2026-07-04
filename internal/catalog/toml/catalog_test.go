@@ -119,6 +119,7 @@ func TestLoadFileAndBuildPlanFromFixture(t *testing.T) {
 		planning.PlanRequest{Profile: "dev"},
 		planning.EnvironmentFacts{OS: "linux", Arch: "amd64"},
 		planning.ConfigState{PresentKeys: map[string]bool{"go.env": true}},
+		planning.InstallationState{},
 	)
 
 	wantSteps := []planning.ResourceRef{toolGit, packageRipgrep, runtimeGo}
@@ -149,6 +150,7 @@ resources = ["runtime:go"]
 		planning.PlanRequest{Profile: "dev"},
 		planning.EnvironmentFacts{},
 		planning.ConfigState{},
+		planning.InstallationState{},
 	)
 
 	if got := refsFromSteps(result.Plan.Steps); !reflect.DeepEqual(got, []planning.ResourceRef{runtimeGo}) {

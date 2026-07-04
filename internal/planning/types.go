@@ -55,6 +55,11 @@ type ConfigState struct {
 	PresentKeys map[string]bool
 }
 
+// InstallationState is caller-supplied resource presence data.
+type InstallationState struct {
+	PresentResources map[ResourceRef]bool
+}
+
 // EnvironmentFacts are caller-supplied facts. The planning core never probes the OS.
 type EnvironmentFacts struct {
 	OS     string
@@ -103,6 +108,7 @@ const (
 	PlanStepStatusPlanned           PlanStepStatus = "planned"
 	PlanStepStatusSkipped           PlanStepStatus = "skipped"
 	PlanStepStatusAttentionRequired PlanStepStatus = "attention_required"
+	PlanStepStatusAlreadyInstalled  PlanStepStatus = "already_installed"
 	PlanStepStatusError             PlanStepStatus = "error"
 )
 

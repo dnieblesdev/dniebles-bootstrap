@@ -51,8 +51,8 @@ func TestBuildPlanExpansionOrderingAndStability(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			first := BuildPlan(catalog, tt.request, EnvironmentFacts{}, ConfigState{})
-			second := BuildPlan(catalog, tt.request, EnvironmentFacts{}, ConfigState{})
+			first := BuildPlan(catalog, tt.request, EnvironmentFacts{}, ConfigState{}, InstallationState{})
+			second := BuildPlan(catalog, tt.request, EnvironmentFacts{}, ConfigState{}, InstallationState{})
 
 			if got := refsFromSteps(first.Plan.Steps); !reflect.DeepEqual(got, tt.wantSteps) {
 				t.Fatalf("steps = %#v, want %#v", got, tt.wantSteps)
@@ -83,7 +83,7 @@ func TestBuildPlanInvalidReferencesAndMissingConfig(t *testing.T) {
 		},
 	}
 
-	result := BuildPlan(catalog, PlanRequest{Profile: "partial"}, EnvironmentFacts{}, ConfigState{})
+	result := BuildPlan(catalog, PlanRequest{Profile: "partial"}, EnvironmentFacts{}, ConfigState{}, InstallationState{})
 
 	if got, want := refsFromSteps(result.Plan.Steps), []ResourceRef{packageRip, runtimeGo}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("steps = %#v, want valid resources planned despite invalid refs %#v", got, want)
@@ -105,7 +105,7 @@ func TestBuildPlanEnvironmentFactsAreCallerSupplied(t *testing.T) {
 		},
 	}
 
-	result := BuildPlan(catalog, PlanRequest{Resources: []ResourceRef{darwinOnly, linuxOnly}}, EnvironmentFacts{OS: "linux"}, ConfigState{})
+	result := BuildPlan(catalog, PlanRequest{Resources: []ResourceRef{darwinOnly, linuxOnly}}, EnvironmentFacts{OS: "linux"}, ConfigState{}, InstallationState{})
 
 	if got, want := refsFromSteps(result.Plan.Steps), []ResourceRef{linuxOnly}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("steps = %#v, want %#v", got, want)
@@ -114,18 +114,115 @@ func TestBuildPlanEnvironmentFactsAreCallerSupplied(t *testing.T) {
 	assertStatus(t, result, darwinOnly, PlanStepStatusSkipped)
 }
 
+func TestBuildPlanInstallationStatePrecedence(t *testing.T) {
+	catalog := Catalog{
+		Resources: map[ResourceRef]Resource{
+			toolGit:    {Ref: toolGit},
+			runtimeGo:  {Ref: runtimeGo, ConfigPolicy: ConfigPolicy{RequiredKeys: []string{"go.env"}}},
+			packageRip: {Ref: packageRip},
+		},
+	}
+
+	// topoOrder sorts steps by refKey "kind:name": package < runtime < tool.
+	wantRuntimeGit := []ResourceRef{runtimeGo, toolGit}
+	wantMixed := []ResourceRef{packageRip, runtimeGo, toolGit}
+
+	tests := []struct {
+		name         string
+		catalog      Catalog
+		request      PlanRequest
+		facts        EnvironmentFacts
+		state        ConfigState
+		installation InstallationState
+		wantSteps    []ResourceRef
+		assertions   func(t *testing.T, result PlanResult)
+	}{
+		{
+			name:         "empty state preserves planned semantics",
+			catalog:      catalog,
+			request:      PlanRequest{Resources: []ResourceRef{toolGit, runtimeGo}},
+			installation: InstallationState{},
+			wantSteps:    wantRuntimeGit,
+			assertions: func(t *testing.T, result PlanResult) {
+				assertStatus(t, result, toolGit, PlanStepStatusPlanned)
+				assertStatus(t, result, runtimeGo, PlanStepStatusAttentionRequired)
+				assertReasonContains(t, result, runtimeGo, "go.env")
+			},
+		},
+		{
+			name:         "present resources become already installed",
+			catalog:      catalog,
+			request:      PlanRequest{Resources: []ResourceRef{toolGit, runtimeGo}},
+			installation: InstallationState{PresentResources: map[ResourceRef]bool{toolGit: true, runtimeGo: true}},
+			wantSteps:    wantRuntimeGit,
+			assertions: func(t *testing.T, result PlanResult) {
+				assertStatus(t, result, toolGit, PlanStepStatusAlreadyInstalled)
+				assertStatus(t, result, runtimeGo, PlanStepStatusAlreadyInstalled)
+			},
+		},
+		{
+			name:         "already installed wins over attention required but keeps reasons",
+			catalog:      catalog,
+			request:      PlanRequest{Resources: []ResourceRef{runtimeGo}},
+			installation: InstallationState{PresentResources: map[ResourceRef]bool{runtimeGo: true}},
+			wantSteps:    []ResourceRef{runtimeGo},
+			assertions: func(t *testing.T, result PlanResult) {
+				assertStatus(t, result, runtimeGo, PlanStepStatusAlreadyInstalled)
+				assertReasonContains(t, result, runtimeGo, "go.env")
+			},
+		},
+		{
+			name:         "mixed state leaves absent resources planned or attention required",
+			catalog:      catalog,
+			request:      PlanRequest{Resources: []ResourceRef{toolGit, runtimeGo, packageRip}},
+			installation: InstallationState{PresentResources: map[ResourceRef]bool{toolGit: true}},
+			wantSteps:    wantMixed,
+			assertions: func(t *testing.T, result PlanResult) {
+				assertStatus(t, result, toolGit, PlanStepStatusAlreadyInstalled)
+				assertStatus(t, result, packageRip, PlanStepStatusPlanned)
+				assertStatus(t, result, runtimeGo, PlanStepStatusAttentionRequired)
+			},
+		},
+		{
+			name:         "environment mismatch stays skipped despite present state",
+			catalog:      Catalog{Resources: map[ResourceRef]Resource{toolGit: {Ref: toolGit, Conditions: EnvironmentConditions{OS: []string{"linux"}}}}},
+			request:      PlanRequest{Resources: []ResourceRef{toolGit}},
+			facts:        EnvironmentFacts{OS: "darwin"},
+			installation: InstallationState{PresentResources: map[ResourceRef]bool{toolGit: true}},
+			wantSteps:    []ResourceRef{},
+			assertions: func(t *testing.T, result PlanResult) {
+				assertStatus(t, result, toolGit, PlanStepStatusSkipped)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := BuildPlan(tt.catalog, tt.request, tt.facts, tt.state, tt.installation)
+
+			if got := refsFromSteps(result.Plan.Steps); !reflect.DeepEqual(got, tt.wantSteps) {
+				t.Fatalf("steps = %#v, want %#v", got, tt.wantSteps)
+			}
+			tt.assertions(t, result)
+		})
+	}
+}
+
 func TestBuildPlanIsPureDataOnly(t *testing.T) {
 	catalog := Catalog{Resources: map[ResourceRef]Resource{toolGit: {Ref: toolGit}}}
 	request := PlanRequest{Resources: []ResourceRef{toolGit}}
 	facts := EnvironmentFacts{OS: "linux", Arch: "amd64"}
 	state := ConfigState{PresentKeys: map[string]bool{"unused": true}}
 
+	installation := InstallationState{PresentResources: map[ResourceRef]bool{toolGit: true}}
+
 	beforeCatalog := cloneCatalog(catalog)
 	beforeRequest := request
 	beforeFacts := facts
 	beforeState := cloneConfigState(state)
+	beforeInstallation := cloneInstallationState(installation)
 
-	_ = BuildPlan(catalog, request, facts, state)
+	_ = BuildPlan(catalog, request, facts, state, installation)
 
 	if !reflect.DeepEqual(catalog, beforeCatalog) {
 		t.Fatalf("catalog mutated: got %#v want %#v", catalog, beforeCatalog)
@@ -138,6 +235,9 @@ func TestBuildPlanIsPureDataOnly(t *testing.T) {
 	}
 	if !reflect.DeepEqual(state, beforeState) {
 		t.Fatalf("state mutated: got %#v want %#v", state, beforeState)
+	}
+	if !reflect.DeepEqual(installation, beforeInstallation) {
+		t.Fatalf("installation state mutated: got %#v want %#v", installation, beforeInstallation)
 	}
 }
 
@@ -233,6 +333,14 @@ func cloneConfigState(state ConfigState) ConfigState {
 	clone := ConfigState{PresentKeys: map[string]bool{}}
 	for key, value := range state.PresentKeys {
 		clone.PresentKeys[key] = value
+	}
+	return clone
+}
+
+func cloneInstallationState(installation InstallationState) InstallationState {
+	clone := InstallationState{PresentResources: map[ResourceRef]bool{}}
+	for ref, present := range installation.PresentResources {
+		clone.PresentResources[ref] = present
 	}
 	return clone
 }
