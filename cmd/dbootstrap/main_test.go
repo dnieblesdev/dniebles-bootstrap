@@ -15,6 +15,7 @@ func TestRunPlanCommand(t *testing.T) {
 		name              string
 		args              []string
 		installationState planning.InstallationState
+		configState       planning.ConfigState
 		wantCode          int
 		wantStdout        string
 		wantStderr        string
@@ -23,6 +24,7 @@ func TestRunPlanCommand(t *testing.T) {
 			name:              "success uses adapter and planner with exact output",
 			args:              []string{"plan", "--profile", "dev", "--catalog", "../../catalog/bootstrap.toml"},
 			installationState: planning.InstallationState{},
+			configState:       planning.ConfigState{},
 			wantCode:          exitSuccess,
 			wantStdout: "Plan profile: dev\n" +
 				"Catalog: ../../catalog/bootstrap.toml\n" +
@@ -54,7 +56,8 @@ func TestRunPlanCommand(t *testing.T) {
 					{Kind: planning.ResourceKindTool, Name: "git"}: true,
 				},
 			},
-			wantCode: exitSuccess,
+			configState: planning.ConfigState{},
+			wantCode:    exitSuccess,
 			wantStdout: "Plan profile: dev\n" +
 				"Catalog: ../../catalog/bootstrap.toml\n" +
 				"Environment: os=linux arch=amd64 distro=test-distro wsl=true\n" +
@@ -75,6 +78,35 @@ func TestRunPlanCommand(t *testing.T) {
 				"- runtime:go: attention_required\n" +
 				"  reason: missing required config \"go.env\"\n" +
 				"- tool:git: already_installed\n",
+			wantStderr: "",
+		},
+		{
+			name:              "present config removes attention for runtime",
+			args:              []string{"plan", "--profile", "dev", "--catalog", "../../catalog/bootstrap.toml"},
+			installationState: planning.InstallationState{},
+			configState: planning.ConfigState{
+				PresentKeys: map[string]bool{"go.env": true},
+			},
+			wantCode: exitSuccess,
+			wantStdout: "Plan profile: dev\n" +
+				"Catalog: ../../catalog/bootstrap.toml\n" +
+				"Environment: os=linux arch=amd64 distro=test-distro wsl=true\n" +
+				"\n" +
+				"Steps:\n" +
+				"1. tool:git [planned] Version control\n" +
+				"   depends_on: none\n" +
+				"   attention: none\n" +
+				"2. package:ripgrep [planned] Fast text search\n" +
+				"   depends_on: tool:git\n" +
+				"   attention: none\n" +
+				"3. runtime:go [planned] Go toolchain\n" +
+				"   depends_on: tool:git\n" +
+				"   attention: none\n" +
+				"\n" +
+				"Results:\n" +
+				"- package:ripgrep: planned\n" +
+				"- runtime:go: planned\n" +
+				"- tool:git: planned\n",
 			wantStderr: "",
 		},
 		{
@@ -108,6 +140,7 @@ func TestRunPlanCommand(t *testing.T) {
 			var stderr bytes.Buffer
 			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64", Distro: "test-distro", WSL: true})
 			stubInstallationState(t, tt.installationState)
+			stubConfigState(t, tt.configState)
 
 			gotCode := run(tt.args, &stdout, &stderr)
 
@@ -208,6 +241,30 @@ func TestRunUsageErrors(t *testing.T) {
 	}
 }
 
+func TestRunPlanCatalogLoadErrorsSkipConfigDetection(t *testing.T) {
+	stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+	stubInstallationState(t, planning.InstallationState{})
+	stubConfigState(t, planning.ConfigState{}) // safe default if somehow reached
+
+	original := detectConfigState
+	detectConfigState = func(planning.Catalog) planning.ConfigState {
+		t.Fatal("config detection must not run when catalog loading fails")
+		return planning.ConfigState{}
+	}
+	t.Cleanup(func() { detectConfigState = original })
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	gotCode := run([]string{"plan", "--profile", "dev", "--catalog", filepath.Join(t.TempDir(), "missing.toml")}, &stdout, &stderr)
+
+	if gotCode != exitFailure {
+		t.Fatalf("run() exit code = %d, want %d", gotCode, exitFailure)
+	}
+	if stdout.String() != "" {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+}
+
 func writeFile(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -229,4 +286,11 @@ func stubInstallationState(t *testing.T, installation planning.InstallationState
 	original := detectInstallationState
 	detectInstallationState = func(planning.Catalog) planning.InstallationState { return installation }
 	t.Cleanup(func() { detectInstallationState = original })
+}
+
+func stubConfigState(t *testing.T, configState planning.ConfigState) {
+	t.Helper()
+	original := detectConfigState
+	detectConfigState = func(planning.Catalog) planning.ConfigState { return configState }
+	t.Cleanup(func() { detectConfigState = original })
 }

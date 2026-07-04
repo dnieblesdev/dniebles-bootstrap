@@ -208,6 +208,51 @@ func TestBuildPlanInstallationStatePrecedence(t *testing.T) {
 	}
 }
 
+func TestBuildPlanConfigState(t *testing.T) {
+	catalog := Catalog{
+		Resources: map[ResourceRef]Resource{
+			runtimeGo: {Ref: runtimeGo, ConfigPolicy: ConfigPolicy{RequiredKeys: []string{"go.env"}}},
+		},
+	}
+
+	tests := []struct {
+		name       string
+		state      ConfigState
+		wantStatus PlanStepStatus
+		wantReason string
+	}{
+		{
+			name:       "missing config yields attention required",
+			state:      ConfigState{},
+			wantStatus: PlanStepStatusAttentionRequired,
+			wantReason: "go.env",
+		},
+		{
+			name:       "present config avoids attention",
+			state:      ConfigState{PresentKeys: map[string]bool{"go.env": true}},
+			wantStatus: PlanStepStatusPlanned,
+			wantReason: "",
+		},
+		{
+			name:       "empty present keys map preserves attention",
+			state:      ConfigState{PresentKeys: map[string]bool{}},
+			wantStatus: PlanStepStatusAttentionRequired,
+			wantReason: "go.env",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := BuildPlan(catalog, PlanRequest{Resources: []ResourceRef{runtimeGo}}, EnvironmentFacts{}, tt.state, InstallationState{})
+
+			assertStatus(t, result, runtimeGo, tt.wantStatus)
+			if tt.wantReason != "" {
+				assertReasonContains(t, result, runtimeGo, tt.wantReason)
+			}
+		})
+	}
+}
+
 func TestBuildPlanIsPureDataOnly(t *testing.T) {
 	catalog := Catalog{Resources: map[ResourceRef]Resource{toolGit: {Ref: toolGit}}}
 	request := PlanRequest{Resources: []ResourceRef{toolGit}}
