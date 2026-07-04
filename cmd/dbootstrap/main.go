@@ -9,6 +9,7 @@ import (
 	catalogtoml "github.com/dnieblesdev/dniebles-bootstrap/internal/catalog/toml"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/environment"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
+	"github.com/dnieblesdev/dniebles-bootstrap/internal/state"
 )
 
 const (
@@ -19,7 +20,10 @@ const (
 	exitUsage   = 2
 )
 
-var detectEnvironmentFacts = environment.Detect
+var (
+	detectEnvironmentFacts  = environment.Detect
+	detectInstallationState = state.Detect
+)
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -74,12 +78,13 @@ func runPlan(args []string, stdout, stderr io.Writer) int {
 	}
 
 	facts := detectEnvironmentFacts()
+	installation := detectInstallationState(catalog)
 	result := planning.BuildPlan(
 		catalog,
 		planning.PlanRequest{Profile: *profile},
 		facts,
 		planning.ConfigState{},
-		planning.InstallationState{},
+		installation,
 	)
 
 	renderPlanResult(stdout, *profile, *catalogPath, facts, result)

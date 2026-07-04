@@ -12,16 +12,18 @@ import (
 
 func TestRunPlanCommand(t *testing.T) {
 	tests := []struct {
-		name       string
-		args       []string
-		wantCode   int
-		wantStdout string
-		wantStderr string
+		name              string
+		args              []string
+		installationState planning.InstallationState
+		wantCode          int
+		wantStdout        string
+		wantStderr        string
 	}{
 		{
-			name:     "success uses adapter and planner with exact output",
-			args:     []string{"plan", "--profile", "dev", "--catalog", "../../catalog/bootstrap.toml"},
-			wantCode: exitSuccess,
+			name:              "success uses adapter and planner with exact output",
+			args:              []string{"plan", "--profile", "dev", "--catalog", "../../catalog/bootstrap.toml"},
+			installationState: planning.InstallationState{},
+			wantCode:          exitSuccess,
 			wantStdout: "Plan profile: dev\n" +
 				"Catalog: ../../catalog/bootstrap.toml\n" +
 				"Environment: os=linux arch=amd64 distro=test-distro wsl=true\n" +
@@ -42,6 +44,37 @@ func TestRunPlanCommand(t *testing.T) {
 				"- runtime:go: attention_required\n" +
 				"  reason: missing required config \"go.env\"\n" +
 				"- tool:git: planned\n",
+			wantStderr: "",
+		},
+		{
+			name: "present tool renders already installed",
+			args: []string{"plan", "--profile", "dev", "--catalog", "../../catalog/bootstrap.toml"},
+			installationState: planning.InstallationState{
+				PresentResources: map[planning.ResourceRef]bool{
+					{Kind: planning.ResourceKindTool, Name: "git"}: true,
+				},
+			},
+			wantCode: exitSuccess,
+			wantStdout: "Plan profile: dev\n" +
+				"Catalog: ../../catalog/bootstrap.toml\n" +
+				"Environment: os=linux arch=amd64 distro=test-distro wsl=true\n" +
+				"\n" +
+				"Steps:\n" +
+				"1. tool:git [already_installed] Version control\n" +
+				"   depends_on: none\n" +
+				"   attention: none\n" +
+				"2. package:ripgrep [planned] Fast text search\n" +
+				"   depends_on: tool:git\n" +
+				"   attention: none\n" +
+				"3. runtime:go [attention_required] Go toolchain\n" +
+				"   depends_on: tool:git\n" +
+				"   attention: missing required config \"go.env\"\n" +
+				"\n" +
+				"Results:\n" +
+				"- package:ripgrep: planned\n" +
+				"- runtime:go: attention_required\n" +
+				"  reason: missing required config \"go.env\"\n" +
+				"- tool:git: already_installed\n",
 			wantStderr: "",
 		},
 		{
@@ -74,6 +107,7 @@ func TestRunPlanCommand(t *testing.T) {
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
 			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64", Distro: "test-distro", WSL: true})
+			stubInstallationState(t, tt.installationState)
 
 			gotCode := run(tt.args, &stdout, &stderr)
 
@@ -188,4 +222,11 @@ func stubEnvironmentFacts(t *testing.T, facts planning.EnvironmentFacts) {
 	original := detectEnvironmentFacts
 	detectEnvironmentFacts = func() planning.EnvironmentFacts { return facts }
 	t.Cleanup(func() { detectEnvironmentFacts = original })
+}
+
+func stubInstallationState(t *testing.T, installation planning.InstallationState) {
+	t.Helper()
+	original := detectInstallationState
+	detectInstallationState = func(planning.Catalog) planning.InstallationState { return installation }
+	t.Cleanup(func() { detectInstallationState = original })
 }
