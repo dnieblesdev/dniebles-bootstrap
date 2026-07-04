@@ -7,6 +7,7 @@ import (
 	"os"
 
 	catalogtoml "github.com/dnieblesdev/dniebles-bootstrap/internal/catalog/toml"
+	"github.com/dnieblesdev/dniebles-bootstrap/internal/environment"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 )
 
@@ -18,10 +19,7 @@ const (
 	exitUsage   = 2
 )
 
-var staticEnvironmentFacts = planning.EnvironmentFacts{
-	OS:   "linux",
-	Arch: "amd64",
-}
+var detectEnvironmentFacts = environment.Detect
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -75,14 +73,15 @@ func runPlan(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
+	facts := detectEnvironmentFacts()
 	result := planning.BuildPlan(
 		catalog,
 		planning.PlanRequest{Profile: *profile},
-		staticEnvironmentFacts,
+		facts,
 		planning.ConfigState{},
 	)
 
-	renderPlanResult(stdout, *profile, *catalogPath, staticEnvironmentFacts, result)
+	renderPlanResult(stdout, *profile, *catalogPath, facts, result)
 	renderDiagnostics(stderr, result)
 	if hasPlanningError(result) {
 		return exitFailure

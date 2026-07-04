@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 )
 
 func TestRunPlanCommand(t *testing.T) {
@@ -22,7 +24,7 @@ func TestRunPlanCommand(t *testing.T) {
 			wantCode: exitSuccess,
 			wantStdout: "Plan profile: dev\n" +
 				"Catalog: ../../catalog/bootstrap.toml\n" +
-				"Environment: os=linux arch=amd64 distro= wsl=false\n" +
+				"Environment: os=linux arch=amd64 distro=test-distro wsl=true\n" +
 				"\n" +
 				"Steps:\n" +
 				"1. tool:git [planned] Version control\n" +
@@ -55,7 +57,7 @@ func TestRunPlanCommand(t *testing.T) {
 			wantCode: exitFailure,
 			wantStdout: "Plan profile: missing\n" +
 				"Catalog: ../../catalog/bootstrap.toml\n" +
-				"Environment: os=linux arch=amd64 distro= wsl=false\n" +
+				"Environment: os=linux arch=amd64 distro=test-distro wsl=true\n" +
 				"\n" +
 				"Steps:\n" +
 				"- none\n" +
@@ -71,6 +73,7 @@ func TestRunPlanCommand(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
+			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64", Distro: "test-distro", WSL: true})
 
 			gotCode := run(tt.args, &stdout, &stderr)
 
@@ -178,4 +181,11 @@ func writeFile(t *testing.T, dir, name, content string) string {
 		t.Fatalf("write fixture: %v", err)
 	}
 	return path
+}
+
+func stubEnvironmentFacts(t *testing.T, facts planning.EnvironmentFacts) {
+	t.Helper()
+	original := detectEnvironmentFacts
+	detectEnvironmentFacts = func() planning.EnvironmentFacts { return facts }
+	t.Cleanup(func() { detectEnvironmentFacts = original })
 }

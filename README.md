@@ -18,7 +18,7 @@ Build or run the current CLI from the repository root:
 go run ./cmd/dbootstrap plan --profile dev
 ```
 
-The command loads `catalog/bootstrap.toml` by default. Use `--catalog <path>` to point at another local TOML catalog file. This slice only plans with static environment facts (`linux/amd64`) and empty configuration state; it does not probe the host or apply/install anything.
+The command loads `catalog/bootstrap.toml` by default. Use `--catalog <path>` to point at another local TOML catalog file. The plan command detects host environment facts (OS, architecture, Linux distro, and WSL status) and uses empty configuration state; it does not apply/install anything.
 
 ## Goals and non-goals
 
@@ -34,7 +34,7 @@ The command loads `catalog/bootstrap.toml` by default. Use `--catalog <path>` to
 |----------|----------|
 | Dotfiles internals | `~/.dotfiles` owns modules, configs, assets, symlinks, validations, and `dotlink` semantics. |
 | Shell orchestration | A shell wrapper may acquire `dbootstrap`, but it must not resolve catalogs, run installers, or own reporting. |
-| Runtime execution in this slice | This change does not add installers, CLI commands, command runners, or runtime OS probing. |
+| Runtime execution in this slice | This change does not add installers, apply/install commands, command runners, or runtime mutation. |
 
 ## Install flows
 
