@@ -19,6 +19,10 @@ id = "ripgrep"
 description = "Fast text search"
 depends_on = ["tool:git"]
 
+[[dotfiles]]
+id = "bash"
+description = "Bash dotfiles"
+
 [[bundles]]
 id = "cli"
 resources = ["tool:git", "package:ripgrep"]

@@ -19,6 +19,9 @@ func validate(raw catalogFile) error {
 	if err := collectResourceRefs(refs, planning.ResourceKindPackage, raw.Packages); err != nil {
 		return err
 	}
+	if err := collectResourceRefs(refs, planning.ResourceKindDotfile, raw.Dotfiles); err != nil {
+		return err
+	}
 
 	bundles := map[string]bool{}
 	for i, entry := range raw.Bundles {
@@ -63,6 +66,9 @@ func validate(raw catalogFile) error {
 		return err
 	}
 	if err := validateDependencyRefs(raw.Packages, refs, planning.ResourceKindPackage); err != nil {
+		return err
+	}
+	if err := validateDependencyRefs(raw.Dotfiles, refs, planning.ResourceKindDotfile); err != nil {
 		return err
 	}
 
@@ -121,7 +127,7 @@ func parseRef(value string) (planning.ResourceRef, error) {
 
 func supportedKind(kind planning.ResourceKind) bool {
 	switch kind {
-	case planning.ResourceKindTool, planning.ResourceKindRuntime, planning.ResourceKindPackage:
+	case planning.ResourceKindTool, planning.ResourceKindRuntime, planning.ResourceKindPackage, planning.ResourceKindDotfile:
 		return true
 	default:
 		return false

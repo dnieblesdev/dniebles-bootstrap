@@ -8,6 +8,7 @@ type catalogFile struct {
 	Tools    []resourceEntry `toml:"tools"`
 	Runtimes []resourceEntry `toml:"runtimes"`
 	Packages []resourceEntry `toml:"packages"`
+	Dotfiles []resourceEntry `toml:"dotfiles"`
 	Bundles  []bundleEntry   `toml:"bundles"`
 	Profiles []profileEntry  `toml:"profiles"`
 }

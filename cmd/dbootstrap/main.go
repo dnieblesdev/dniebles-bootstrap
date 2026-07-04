@@ -8,6 +8,7 @@ import (
 
 	catalogtoml "github.com/dnieblesdev/dniebles-bootstrap/internal/catalog/toml"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/config"
+	"github.com/dnieblesdev/dniebles-bootstrap/internal/dotfiles"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/environment"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/state"
@@ -25,6 +26,7 @@ var (
 	detectEnvironmentFacts  = environment.Detect
 	detectInstallationState = state.Detect
 	detectConfigState       = config.Detect
+	detectDotfilesState     = dotfiles.Detect
 )
 
 func main() {
@@ -81,6 +83,7 @@ func runPlan(args []string, stdout, stderr io.Writer) int {
 
 	facts := detectEnvironmentFacts()
 	installation := detectInstallationState(catalog)
+	installation = mergeInstallationState(installation, detectDotfilesState(catalog))
 	configState := detectConfigState(catalog)
 	result := planning.BuildPlan(
 		catalog,
@@ -105,6 +108,24 @@ func hasPlanningError(result planning.PlanResult) bool {
 		}
 	}
 	return false
+}
+
+// mergeInstallationState combines two presence maps into a new state.
+// It is used at the CLI composition root to fold read-only dotfile availability
+// into the existing installation state without changing the planner signature.
+func mergeInstallationState(base, extra planning.InstallationState) planning.InstallationState {
+	merged := planning.InstallationState{
+		PresentResources: make(map[planning.ResourceRef]bool, len(base.PresentResources)+len(extra.PresentResources)),
+	}
+	for ref, present := range base.PresentResources {
+		merged.PresentResources[ref] = present
+	}
+	for ref, present := range extra.PresentResources {
+		if present {
+			merged.PresentResources[ref] = true
+		}
+	}
+	return merged
 }
 
 func printUsage(w io.Writer) {

@@ -157,6 +157,43 @@ func TestRunPlanCommand(t *testing.T) {
 	}
 }
 
+func TestRunPlanDotfilesPresenceReachesPlanning(t *testing.T) {
+	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `
+schema = "dniebles.catalog"
+version = 1
+
+[[dotfiles]]
+id = "shell"
+description = "Shell config"
+
+[[profiles]]
+id = "dev"
+resources = ["dotfile:shell"]
+`)
+	stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+	stubInstallationState(t, planning.InstallationState{})
+	stubConfigState(t, planning.ConfigState{})
+	stubDotfilesState(t, planning.InstallationState{
+		PresentResources: map[planning.ResourceRef]bool{
+			{Kind: planning.ResourceKindDotfile, Name: "shell"}: true,
+		},
+	})
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	gotCode := run([]string{"plan", "--profile", "dev", "--catalog", catalogPath}, &stdout, &stderr)
+
+	if gotCode != exitSuccess {
+		t.Fatalf("run() exit code = %d, want %d", gotCode, exitSuccess)
+	}
+	if !strings.Contains(stdout.String(), "dotfile:shell [already_installed]") {
+		t.Fatalf("stdout missing already_installed dotfile: %q", stdout.String())
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestRunPlanCatalogLoadErrors(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -241,17 +278,25 @@ func TestRunUsageErrors(t *testing.T) {
 	}
 }
 
-func TestRunPlanCatalogLoadErrorsSkipConfigDetection(t *testing.T) {
+func TestRunPlanCatalogLoadErrorsSkipDetection(t *testing.T) {
 	stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
 	stubInstallationState(t, planning.InstallationState{})
 	stubConfigState(t, planning.ConfigState{}) // safe default if somehow reached
+	stubDotfilesState(t, planning.InstallationState{})
 
-	original := detectConfigState
+	originalConfig := detectConfigState
 	detectConfigState = func(planning.Catalog) planning.ConfigState {
 		t.Fatal("config detection must not run when catalog loading fails")
 		return planning.ConfigState{}
 	}
-	t.Cleanup(func() { detectConfigState = original })
+	t.Cleanup(func() { detectConfigState = originalConfig })
+
+	originalDotfiles := detectDotfilesState
+	detectDotfilesState = func(planning.Catalog) planning.InstallationState {
+		t.Fatal("dotfiles detection must not run when catalog loading fails")
+		return planning.InstallationState{}
+	}
+	t.Cleanup(func() { detectDotfilesState = originalDotfiles })
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -293,4 +338,11 @@ func stubConfigState(t *testing.T, configState planning.ConfigState) {
 	original := detectConfigState
 	detectConfigState = func(planning.Catalog) planning.ConfigState { return configState }
 	t.Cleanup(func() { detectConfigState = original })
+}
+
+func stubDotfilesState(t *testing.T, installation planning.InstallationState) {
+	t.Helper()
+	original := detectDotfilesState
+	detectDotfilesState = func(planning.Catalog) planning.InstallationState { return installation }
+	t.Cleanup(func() { detectDotfilesState = original })
 }

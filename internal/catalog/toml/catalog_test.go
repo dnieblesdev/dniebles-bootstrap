@@ -34,6 +34,7 @@ func TestDecodeValidCatalog(t *testing.T) {
 						Conditions:   planning.EnvironmentConditions{OS: []string{"linux"}, Arch: []string{"amd64"}, WSL: boolPtr(false)},
 					},
 					packageRipgrep: {Ref: packageRipgrep, Description: "Fast text search", DependsOn: []planning.ResourceRef{toolGit}},
+					dotBash:        {Ref: dotBash, Description: "Bash dotfiles", DependsOn: []planning.ResourceRef{}},
 				},
 			},
 		},
@@ -80,8 +81,23 @@ func TestDecodeValidationErrors(t *testing.T) {
 		},
 		{
 			name:    "unsupported ref kind",
-			input:   "[[tools]]\nid = \"git\"\n\n[[bundles]]\nid = \"cli\"\nresources = [\"dotfile:shell\"]",
+			input:   "[[tools]]\nid = \"git\"\n\n[[bundles]]\nid = \"cli\"\nresources = [\"script:shell\"]",
 			wantErr: "unsupported resource kind",
+		},
+		{
+			name:    "dotfile missing required id",
+			input:   "[[dotfiles]]\ndescription = \"missing id\"",
+			wantErr: "missing required id",
+		},
+		{
+			name:    "duplicate dotfile id",
+			input:   "[[dotfiles]]\nid = \"bash\"\n\n[[dotfiles]]\nid = \"bash\"",
+			wantErr: "duplicate resource id",
+		},
+		{
+			name:    "dotfile depends on unknown resource",
+			input:   "[[dotfiles]]\nid = \"bash\"\ndepends_on = [\"tool:missing\"]",
+			wantErr: "unknown resource",
 		},
 		{
 			name:    "unknown resource ref",
@@ -105,6 +121,45 @@ func TestDecodeValidationErrors(t *testing.T) {
 				t.Fatalf("Decode() error = %v, want substring %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestDecodeDotfileRefsAreValid(t *testing.T) {
+	input := `
+[[tools]]
+id = "git"
+
+[[dotfiles]]
+id = "bash"
+depends_on = ["tool:git"]
+
+[[bundles]]
+id = "shell"
+resources = ["dotfile:bash"]
+
+[[profiles]]
+id = "dev"
+resources = ["dotfile:bash"]
+`
+	catalog, err := Decode(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+
+	want := planning.Catalog{
+		Profiles: map[string]planning.Profile{
+			"dev": {Name: "dev", Resources: []planning.ResourceRef{dotBash}},
+		},
+		Bundles: map[string]planning.Bundle{
+			"shell": {Name: "shell", Resources: []planning.ResourceRef{dotBash}},
+		},
+		Resources: map[planning.ResourceRef]planning.Resource{
+			toolGit: {Ref: toolGit, DependsOn: []planning.ResourceRef{}},
+			dotBash: {Ref: dotBash, DependsOn: []planning.ResourceRef{toolGit}},
+		},
+	}
+	if !reflect.DeepEqual(catalog, want) {
+		t.Fatalf("Decode() = %#v, want %#v", catalog, want)
 	}
 }
 
@@ -204,6 +259,7 @@ var (
 	toolGit        = planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "git"}
 	runtimeGo      = planning.ResourceRef{Kind: planning.ResourceKindRuntime, Name: "go"}
 	packageRipgrep = planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "ripgrep"}
+	dotBash        = planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "bash"}
 )
 
 const validCatalogTOML = `
@@ -228,6 +284,10 @@ wsl = false
 id = "ripgrep"
 description = "Fast text search"
 depends_on = ["tool:git"]
+
+[[dotfiles]]
+id = "bash"
+description = "Bash dotfiles"
 
 [[bundles]]
 id = "cli"

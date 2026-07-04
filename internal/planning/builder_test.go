@@ -208,6 +208,40 @@ func TestBuildPlanInstallationStatePrecedence(t *testing.T) {
 	}
 }
 
+func TestBuildPlanDotfilePresenceUsesInstallationState(t *testing.T) {
+	catalog := Catalog{
+		Resources: map[ResourceRef]Resource{
+			dotShell: {Ref: dotShell, Description: "Shell config"},
+		},
+	}
+
+	tests := []struct {
+		name         string
+		installation InstallationState
+		wantStatus   PlanStepStatus
+	}{
+		{
+			name:         "absent dotfile is planned",
+			installation: InstallationState{},
+			wantStatus:   PlanStepStatusPlanned,
+		},
+		{
+			name: "present dotfile is already installed",
+			installation: InstallationState{
+				PresentResources: map[ResourceRef]bool{dotShell: true},
+			},
+			wantStatus: PlanStepStatusAlreadyInstalled,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := BuildPlan(catalog, PlanRequest{Resources: []ResourceRef{dotShell}}, EnvironmentFacts{}, ConfigState{}, tt.installation)
+			assertStatus(t, result, dotShell, tt.wantStatus)
+		})
+	}
+}
+
 func TestBuildPlanConfigState(t *testing.T) {
 	catalog := Catalog{
 		Resources: map[ResourceRef]Resource{
