@@ -1,33 +1,19 @@
 # Repository Operating Guide
 
-This repository uses SDD/OpenSpec planning before implementation. Agents and contributors must keep the bootstrapper domain-first and must not move dotfiles ownership into this project.
+This repository keeps bootstrap orchestration domain-first and must not move dotfiles ownership into this project. This guide only documents repo-local policies; general SDD/OpenSpec workflow comes from the active agent prompts and OpenSpec artifacts.
 
 ## Working rules
 
 | Rule | Requirement |
 |------|-------------|
-| Specs before code | Do not implement runtime behavior before the relevant proposal, specs, design, and tasks exist. |
-| English artifacts | Generated technical artifacts, docs, specs, code comments, and user-facing strings default to English. |
 | Local agent state | `.atl/` is local skill-registry state and must remain ignored by git. |
-| Documentation-only slices | When a change is declared docs/spec-only, do not create Go source files, catalog runtime files, installers, or CLI wiring. |
-| Reviewable units | Keep specs and docs that describe one outcome together; do not split work only by file type. |
+| Repo policy only | Keep this file limited to local boundaries, architecture, safety rules, and mutation constraints. Do not duplicate generic SDD/OpenSpec instructions here. |
+| Slice scope | Respect the active change scope. If a slice is docs/spec-only, do not create Go source files, catalog runtime files, installers, or CLI wiring. |
+| Apply safety | Do not make `dbootstrap apply` mutate the host unless the active change explicitly defines the safety contract and opt-in behavior. |
 
-## SDD workflow
+## Local SDD persistence
 
-Use the active OpenSpec change folder and Engram artifacts together when the session requests both backends.
-
-1. Read the proposal, delta specs, design, and tasks before editing.
-2. Apply only the tasks assigned for the current slice.
-3. Keep OpenSpec files and Engram SDD topics aligned.
-4. Mark completed tasks in `tasks.md` as soon as they are done.
-5. Save apply progress to Engram with `capture_prompt: false` for automated SDD artifacts.
-
-Primary planning path for the current change:
-
-- `openspec/changes/design-bootstrap-orchestrator/proposal.md`
-- `openspec/changes/design-bootstrap-orchestrator/design.md`
-- `openspec/changes/design-bootstrap-orchestrator/specs/`
-- `openspec/changes/design-bootstrap-orchestrator/tasks.md`
+When automated SDD artifacts are saved to Engram, use `capture_prompt: false` for generated phase artifacts such as apply progress, verification reports, and archive reports.
 
 ## Dotfiles boundary
 
