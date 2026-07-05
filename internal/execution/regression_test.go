@@ -1,13 +1,14 @@
 package execution
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 )
 
 func TestPlanningProductionCodeUnchanged(t *testing.T) {
@@ -31,34 +32,23 @@ func TestPlanningProductionCodeUnchanged(t *testing.T) {
 	}
 }
 
-func TestNoApplyCommandInCLI(t *testing.T) {
-	mainPath := filepath.Join("..", "..", "cmd", "dbootstrap", "main.go")
-	src, err := os.ReadFile(mainPath)
-	if err != nil {
-		t.Fatalf("read main.go: %v", err)
+func TestNoopExecutionRemainsNonMutating(t *testing.T) {
+	// This regression replaces the previous "no apply command" gate with a
+	// safety check that noop execution helpers never invoke real commands or
+	// touch the filesystem.
+	inst := NoopForKind(planning.ResourceKindTool)
+	result := inst.Install(context.Background(), planning.PlanStep{
+		Ref: planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "git"},
+	})
+	if result.Status != StepStatusNotImplemented {
+		t.Fatalf("noop status = %q, want not_implemented", result.Status)
 	}
 
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, mainPath, src, 0)
-	if err != nil {
-		t.Fatalf("parse main.go: %v", err)
+	provider := NoopDotfilesProvider{}
+	if err := provider.EnsureModules(context.Background(), []string{"shell"}); !errors.Is(err, ErrNotImplemented) {
+		t.Fatalf("EnsureModules error = %v, want ErrNotImplemented", err)
 	}
-
-	for _, decl := range f.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
-		if fn.Name.Name == "run" {
-			ast.Inspect(fn, func(n ast.Node) bool {
-				if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-					value := strings.Trim(lit.Value, "`\"")
-					if value == "apply" {
-						t.Fatalf("main.go contains an apply command: %s", lit.Value)
-					}
-				}
-				return true
-			})
-		}
+	if err := provider.RunDotlink(context.Background(), []string{"shell"}); !errors.Is(err, ErrNotImplemented) {
+		t.Fatalf("RunDotlink error = %v, want ErrNotImplemented", err)
 	}
 }

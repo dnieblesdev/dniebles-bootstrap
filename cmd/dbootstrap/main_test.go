@@ -413,16 +413,18 @@ func TestRunUsageErrors(t *testing.T) {
 				"\n" +
 				"Commands:\n" +
 				"  plan    Build a deterministic plan for a profile\n" +
+				"  apply   Run a dry-run execution of the plan (noop only)\n" +
 				"error: command is required\n",
 		},
 		{
 			name: "unknown command",
-			args: []string{"apply"},
+			args: []string{"deploy"},
 			wantStderr: "Usage: dbootstrap <command> [options]\n" +
 				"\n" +
 				"Commands:\n" +
 				"  plan    Build a deterministic plan for a profile\n" +
-				"error: unknown command \"apply\"\n",
+				"  apply   Run a dry-run execution of the plan (noop only)\n" +
+				"error: unknown command \"deploy\"\n",
 		},
 	}
 
@@ -475,6 +477,115 @@ func TestRunPlanCatalogLoadErrorsSkipDetection(t *testing.T) {
 	}
 	if stdout.String() != "" {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+}
+
+func TestRunApplyCommand(t *testing.T) {
+	tests := []struct {
+		name              string
+		args              []string
+		installationState planning.InstallationState
+		configState       planning.ConfigState
+		wantCode          int
+		wantStdout        string
+		wantStderr        string
+	}{
+		{
+			name:              "dry run profile renders not implemented execution report",
+			args:              []string{"apply", "--profile", "dev", "--catalog", "../../catalog/bootstrap.toml"},
+			installationState: planning.InstallationState{},
+			configState:       planning.ConfigState{},
+			wantCode:          exitSuccess,
+			wantStdout: "Execution Report\n" +
+				"\n" +
+				"Steps:\n" +
+				"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
+				"2. package:ripgrep [not_implemented] noop installer does not perform real installation\n" +
+				"3. runtime:go [not_implemented] noop installer does not perform real installation\n",
+			wantStderr: "",
+		},
+		{
+			name:              "dry run resource only renders single step",
+			args:              []string{"apply", "--resource", "tool:git", "--catalog", "../../catalog/bootstrap.toml"},
+			installationState: planning.InstallationState{},
+			configState:       planning.ConfigState{},
+			wantCode:          exitSuccess,
+			wantStdout: "Execution Report\n" +
+				"\n" +
+				"Steps:\n" +
+				"1. tool:git [not_implemented] noop installer does not perform real installation\n",
+			wantStderr: "",
+		},
+		{
+			name:       "missing target is a stable usage error",
+			args:       []string{"apply"},
+			wantCode:   exitUsage,
+			wantStdout: "",
+			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>]\nerror: --profile or --resource is required\n",
+		},
+		{
+			name:       "malformed resource ref is rejected",
+			args:       []string{"apply", "--resource", "git", "--catalog", "../../catalog/bootstrap.toml"},
+			wantCode:   exitUsage,
+			wantStdout: "",
+			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>]\nerror: invalid resource ref \"git\": expected kind:name\n",
+		},
+		{
+			name:     "unknown profile exits with plan diagnostics and no execution report",
+			args:     []string{"apply", "--profile", "missing", "--catalog", "../../catalog/bootstrap.toml"},
+			wantCode: exitFailure,
+			wantStdout: "Plan profile: missing\n" +
+				"Catalog: ../../catalog/bootstrap.toml\n" +
+				"Environment: os=linux arch=amd64 distro=test-distro wsl=true\n" +
+				"\n" +
+				"Steps:\n" +
+				"- none\n" +
+				"\n" +
+				"Results:\n" +
+				"- diagnostic: error\n" +
+				"  reason: unknown profile \"missing\"\n",
+			wantStderr: "Diagnostics:\n- diagnostic: unknown profile \"missing\"\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64", Distro: "test-distro", WSL: true})
+			stubInstallationState(t, tt.installationState)
+			stubConfigState(t, tt.configState)
+			stubDotfilesState(t, planning.InstallationState{})
+
+			gotCode := run(tt.args, &stdout, &stderr)
+
+			if gotCode != tt.wantCode {
+				t.Fatalf("run() exit code = %d, want %d", gotCode, tt.wantCode)
+			}
+			if got := stdout.String(); got != tt.wantStdout {
+				t.Fatalf("stdout = %q, want %q", got, tt.wantStdout)
+			}
+			if got := stderr.String(); got != tt.wantStderr {
+				t.Fatalf("stderr = %q, want %q", got, tt.wantStderr)
+			}
+		})
+	}
+}
+
+func TestRunApplyCatalogLoadErrors(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	gotCode := run([]string{"apply", "--profile", "dev", "--catalog", filepath.Join(t.TempDir(), "missing.toml")}, &stdout, &stderr)
+
+	if gotCode != exitFailure {
+		t.Fatalf("run() exit code = %d, want %d", gotCode, exitFailure)
+	}
+	if stdout.String() != "" {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "error: load catalog ") || !strings.Contains(stderr.String(), "no such file or directory") {
+		t.Fatalf("stderr = %q, want load error", stderr.String())
 	}
 }
 

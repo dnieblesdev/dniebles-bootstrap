@@ -28,6 +28,23 @@ func (NoopInstaller) Install(_ context.Context, step planning.PlanStep) StepResu
 	}
 }
 
+// NoopForKind returns a kind-aware noop installer that reports the requested
+// kind as supported while remaining non-mutating. It is used by dry-run paths
+// to show intentional noop execution per resource kind.
+func NoopForKind(kind planning.ResourceKind) Installer {
+	return &noopForKindInstaller{kind: kind}
+}
+
+type noopForKindInstaller struct {
+	kind planning.ResourceKind
+}
+
+func (n *noopForKindInstaller) SupportedKind() planning.ResourceKind { return n.kind }
+
+func (n *noopForKindInstaller) Install(ctx context.Context, step planning.PlanStep) StepResult {
+	return NoopInstaller{}.Install(ctx, step)
+}
+
 // NoopDotfilesProvider is a safe provider stub that returns not_implemented
 // without cloning, applying, installing, or mutating dotfiles.
 type NoopDotfilesProvider struct{}

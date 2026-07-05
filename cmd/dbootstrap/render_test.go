@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/dnieblesdev/dniebles-bootstrap/internal/execution"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 )
 
@@ -98,6 +99,40 @@ func TestRenderPlanResultResourceOnlyHeader(t *testing.T) {
 		"\n" +
 		"Results:\n" +
 		"- tool:git: planned\n"
+	if got := stdout.String(); got != wantStdout {
+		t.Fatalf("stdout = %q, want %q", got, wantStdout)
+	}
+}
+
+func TestRenderExecutionReportIsDistinctFromPlanRendering(t *testing.T) {
+	report := execution.ExecutionReport{
+		Results: []execution.StepResult{
+			{Ref: planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "git"}, Status: execution.StepStatusNotImplemented, Message: "noop installer does not perform real installation"},
+			{Ref: planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "ripgrep"}, Status: execution.StepStatusNotImplemented, Message: "noop installer does not perform real installation"},
+		},
+	}
+
+	var stdout bytes.Buffer
+	renderExecutionReport(&stdout, report)
+
+	wantStdout := "Execution Report\n" +
+		"\n" +
+		"Steps:\n" +
+		"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
+		"2. package:ripgrep [not_implemented] noop installer does not perform real installation\n"
+	if got := stdout.String(); got != wantStdout {
+		t.Fatalf("stdout = %q, want %q", got, wantStdout)
+	}
+}
+
+func TestRenderExecutionReportHandlesEmptyReport(t *testing.T) {
+	var stdout bytes.Buffer
+	renderExecutionReport(&stdout, execution.ExecutionReport{})
+
+	wantStdout := "Execution Report\n" +
+		"\n" +
+		"Steps:\n" +
+		"- none\n"
 	if got := stdout.String(); got != wantStdout {
 		t.Fatalf("stdout = %q, want %q", got, wantStdout)
 	}

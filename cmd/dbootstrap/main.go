@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/config"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/dotfiles"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/environment"
+	"github.com/dnieblesdev/dniebles-bootstrap/internal/execution"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/state"
 )
@@ -55,6 +57,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "plan":
 		return runPlan(args[1:], stdout, stderr)
+	case "apply":
+		return runApply(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		printUsage(stdout)
 		return exitSuccess
@@ -66,7 +70,59 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func runPlan(args []string, stdout, stderr io.Writer) int {
-	flags := flag.NewFlagSet("plan", flag.ContinueOnError)
+	request, catalogPath, ok := parsePlanFlags("plan", args, stderr)
+	if !ok {
+		return exitUsage
+	}
+
+	result, facts, err := buildPlan(catalogPath, request)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: load catalog %q: %v\n", catalogPath, err)
+		return exitFailure
+	}
+
+	renderPlanResult(stdout, request.Profile, request.Resources, catalogPath, facts, result)
+	renderDiagnostics(stderr, result)
+	if hasPlanningError(result) {
+		return exitFailure
+	}
+	return exitSuccess
+}
+
+func runApply(args []string, stdout, stderr io.Writer) int {
+	request, catalogPath, ok := parsePlanFlags("apply", args, stderr)
+	if !ok {
+		return exitUsage
+	}
+
+	result, facts, err := buildPlan(catalogPath, request)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: load catalog %q: %v\n", catalogPath, err)
+		return exitFailure
+	}
+
+	if hasPlanningError(result) {
+		renderPlanResult(stdout, request.Profile, request.Resources, catalogPath, facts, result)
+		renderDiagnostics(stderr, result)
+		return exitFailure
+	}
+
+	runner := execution.NewRunner(
+		execution.NoopForKind(planning.ResourceKindTool),
+		execution.NoopForKind(planning.ResourceKindRuntime),
+		execution.NoopForKind(planning.ResourceKindPackage),
+		execution.NoopForKind(planning.ResourceKindDotfile),
+	)
+	report := runner.Run(context.Background(), result.Plan)
+	renderExecutionReport(stdout, report)
+	return exitSuccess
+}
+
+// parsePlanFlags parses the shared target surface used by plan and apply.
+// It validates --profile, repeatable --resource, and --catalog and returns the
+// assembled PlanRequest, catalog path, and a flag indicating success.
+func parsePlanFlags(command string, args []string, stderr io.Writer) (planning.PlanRequest, string, bool) {
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
 	profile := flags.String("profile", "", "profile name to plan")
@@ -75,33 +131,37 @@ func runPlan(args []string, stdout, stderr io.Writer) int {
 	catalogPath := flags.String("catalog", defaultCatalogPath, "catalog TOML file path")
 
 	if err := flags.Parse(args); err != nil {
-		printPlanUsage(stderr)
-		return exitUsage
+		printCommandUsage(command, stderr)
+		return planning.PlanRequest{}, "", false
 	}
 	if flags.NArg() > 0 {
-		printPlanUsage(stderr)
+		printCommandUsage(command, stderr)
 		fmt.Fprintf(stderr, "error: unexpected argument %q\n", flags.Arg(0))
-		return exitUsage
+		return planning.PlanRequest{}, "", false
 	}
 
 	resourceRefs, err := parseResourceRefs(resources.values)
 	if err != nil {
-		printPlanUsage(stderr)
+		printCommandUsage(command, stderr)
 		fmt.Fprintf(stderr, "error: %v\n", err)
-		return exitUsage
+		return planning.PlanRequest{}, "", false
 	}
 	resourceRefs = dedupeResourceRefs(resourceRefs)
 
 	if *profile == "" && len(resourceRefs) == 0 {
-		printPlanUsage(stderr)
+		printCommandUsage(command, stderr)
 		fmt.Fprintln(stderr, "error: --profile or --resource is required")
-		return exitUsage
+		return planning.PlanRequest{}, "", false
 	}
 
-	catalog, err := catalogtoml.LoadFile(*catalogPath)
+	return planning.PlanRequest{Profile: *profile, Resources: resourceRefs}, *catalogPath, true
+}
+
+// buildPlan loads the catalog, runs detectors, and builds the plan for the request.
+func buildPlan(catalogPath string, request planning.PlanRequest) (planning.PlanResult, planning.EnvironmentFacts, error) {
+	catalog, err := catalogtoml.LoadFile(catalogPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "error: load catalog %q: %v\n", *catalogPath, err)
-		return exitFailure
+		return planning.PlanResult{}, planning.EnvironmentFacts{}, err
 	}
 
 	facts := detectEnvironmentFacts()
@@ -110,18 +170,12 @@ func runPlan(args []string, stdout, stderr io.Writer) int {
 	configState := detectConfigState(catalog)
 	result := planning.BuildPlan(
 		catalog,
-		planning.PlanRequest{Profile: *profile, Resources: resourceRefs},
+		request,
 		facts,
 		configState,
 		installation,
 	)
-
-	renderPlanResult(stdout, *profile, resourceRefs, *catalogPath, facts, result)
-	renderDiagnostics(stderr, result)
-	if hasPlanningError(result) {
-		return exitFailure
-	}
-	return exitSuccess
+	return result, facts, nil
 }
 
 func hasPlanningError(result planning.PlanResult) bool {
@@ -156,10 +210,24 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  plan    Build a deterministic plan for a profile")
+	fmt.Fprintln(w, "  apply   Run a dry-run execution of the plan (noop only)")
+}
+
+func printCommandUsage(command string, w io.Writer) {
+	switch command {
+	case "apply":
+		printApplyUsage(w)
+	default:
+		printPlanUsage(w)
+	}
 }
 
 func printPlanUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: dbootstrap plan [--profile <name>] [--resource <kind:name>] [--catalog <path>]")
+}
+
+func printApplyUsage(w io.Writer) {
+	fmt.Fprintln(w, "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>]")
 }
 
 func parseResourceRef(value string) (planning.ResourceRef, error) {

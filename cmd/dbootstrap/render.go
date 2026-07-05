@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/dnieblesdev/dniebles-bootstrap/internal/execution"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 )
 
@@ -47,6 +48,23 @@ func renderPlanResult(w io.Writer, profile string, resources []planning.Resource
 				fmt.Fprintf(w, "  reason: %s\n", reason)
 			}
 		}
+	}
+}
+
+func renderExecutionReport(w io.Writer, report execution.ExecutionReport) {
+	fmt.Fprintln(w, "Execution Report")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Steps:")
+	if len(report.Results) == 0 {
+		fmt.Fprintln(w, "- none")
+		return
+	}
+	for index, result := range report.Results {
+		fmt.Fprintf(w, "%d. %s [%s]", index+1, renderRef(result.Ref), result.Status)
+		if result.Message != "" {
+			fmt.Fprintf(w, " %s", result.Message)
+		}
+		fmt.Fprintln(w)
 	}
 }
 

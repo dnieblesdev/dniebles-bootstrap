@@ -70,19 +70,20 @@ It MUST remain separate from the read-only dotfiles detector and MUST NOT own pl
 - WHEN dotfiles execution support is considered
 - THEN DotfilesProvider does not change planning behavior
 
-### Requirement: Explicit no-apply, no-real-execution, no-mutation boundary
+### Requirement: Execution contracts remain non-mutating for apply
 
-The execution slice MUST NOT add an apply command, CLI wiring, real execution, host mutation, installers with side effects, or planning production changes.
-It MUST remain a contracts-only boundary.
+`internal/execution` MUST remain a safe, non-mutating boundary used by `apply`.
+The command MUST use noop execution contracts only, and MUST NOT introduce real execution, host mutation, installers with side effects, or planning production changes.
+(Previously: The execution slice prohibited any apply command or CLI wiring.)
 
-#### Scenario: No apply command is introduced
+#### Scenario: Apply uses noop execution contracts only
 
-- GIVEN the change is implemented
-- WHEN the CLI surface is reviewed
-- THEN no apply command exists
+- GIVEN the `apply` command runs
+- WHEN execution is dispatched
+- THEN only noop results are produced
 
-#### Scenario: No side effects are introduced
+#### Scenario: Side effects remain absent
 
 - GIVEN execution contracts are present
-- WHEN noop paths are exercised
+- WHEN `apply` is reviewed end-to-end
 - THEN no real execution or production mutation occurs
