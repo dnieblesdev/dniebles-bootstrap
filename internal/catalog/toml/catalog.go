@@ -79,6 +79,8 @@ func mapResources(resources map[planning.ResourceRef]planning.Resource, kind pla
 				Distro: append([]string(nil), entry.Distro...),
 				WSL:    cloneBool(entry.WSL),
 			},
+			Install:  cloneInstallMetadata(entry.Install),
+			Presence: clonePresenceMetadata(entry.Presence),
 		}
 	}
 }
@@ -101,4 +103,24 @@ func cloneBool(value *bool) *bool {
 	}
 	clone := *value
 	return &clone
+}
+
+func cloneInstallMetadata(entry *installEntry) *planning.InstallMetadata {
+	if entry == nil {
+		return nil
+	}
+	return &planning.InstallMetadata{
+		Provider: entry.Provider,
+		Package:  entry.Package,
+	}
+}
+
+func clonePresenceMetadata(entry *presenceEntry) *planning.PresenceMetadata {
+	if entry == nil {
+		return nil
+	}
+	return &planning.PresenceMetadata{
+		Kind: entry.Kind,
+		Name: entry.Name,
+	}
 }

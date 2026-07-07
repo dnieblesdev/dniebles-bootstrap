@@ -5,6 +5,12 @@ version = 1
 id = "git"
 description = "Version control"
 os = ["linux", "darwin"]
+[tools.install]
+provider = "apt"
+package = "git"
+[tools.presence]
+kind = "command_exists"
+name = "git"
 
 [[runtimes]]
 id = "go"
@@ -13,11 +19,23 @@ depends_on = ["tool:git"]
 config_required = ["go.env"]
 os = ["linux", "darwin"]
 arch = ["amd64", "arm64"]
+[runtimes.install]
+provider = "asdf"
+package = "golang"
+[runtimes.presence]
+kind = "command_exists"
+name = "go"
 
 [[packages]]
 id = "ripgrep"
 description = "Fast text search"
 depends_on = ["tool:git"]
+[packages.install]
+provider = "apt"
+package = "ripgrep"
+[packages.presence]
+kind = "command_exists"
+name = "rg"
 
 [[dotfiles]]
 id = "bash"

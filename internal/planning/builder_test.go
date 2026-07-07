@@ -320,6 +320,90 @@ func TestBuildPlanIsPureDataOnly(t *testing.T) {
 	}
 }
 
+func TestBuildPlanPreservesResourceMetadata(t *testing.T) {
+	catalog := Catalog{
+		Resources: map[ResourceRef]Resource{
+			packageRip: {
+				Ref:       packageRip,
+				DependsOn: []ResourceRef{toolGit},
+				Install:   &InstallMetadata{Provider: "brew", Package: "ripgrep"},
+				Presence:  &PresenceMetadata{Kind: "command_exists", Name: "rg"},
+			},
+			runtimeGo: {
+				Ref:       runtimeGo,
+				DependsOn: []ResourceRef{toolGit},
+				Install:   &InstallMetadata{Provider: "asdf", Package: "golang"},
+			},
+			toolGit: {Ref: toolGit},
+		},
+	}
+
+	result := BuildPlan(
+		catalog,
+		PlanRequest{Resources: []ResourceRef{packageRip, runtimeGo, toolGit}},
+		EnvironmentFacts{},
+		ConfigState{},
+		InstallationState{},
+	)
+
+	wantSteps := []ResourceRef{toolGit, packageRip, runtimeGo}
+	if got := refsFromSteps(result.Plan.Steps); !reflect.DeepEqual(got, wantSteps) {
+		t.Fatalf("steps = %#v, want %#v", got, wantSteps)
+	}
+
+	for _, step := range result.Plan.Steps {
+		switch step.Ref {
+		case packageRip:
+			if got, want := step.Resource.Install, (&InstallMetadata{Provider: "brew", Package: "ripgrep"}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("package install metadata = %#v, want %#v", got, want)
+			}
+			if got, want := step.Resource.Presence, (&PresenceMetadata{Kind: "command_exists", Name: "rg"}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("package presence metadata = %#v, want %#v", got, want)
+			}
+		case runtimeGo:
+			if got, want := step.Resource.Install, (&InstallMetadata{Provider: "asdf", Package: "golang"}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("runtime install metadata = %#v, want %#v", got, want)
+			}
+			if step.Resource.Presence != nil {
+				t.Fatalf("runtime presence metadata = %#v, want nil", step.Resource.Presence)
+			}
+		case toolGit:
+			if step.Resource.Install != nil || step.Resource.Presence != nil {
+				t.Fatalf("tool metadata should be nil, got install=%#v presence=%#v", step.Resource.Install, step.Resource.Presence)
+			}
+		}
+	}
+}
+
+func TestBuildPlanMetadataDoesNotAlterPlanningOutcome(t *testing.T) {
+	base := Catalog{
+		Resources: map[ResourceRef]Resource{
+			packageRip: {Ref: packageRip, DependsOn: []ResourceRef{toolGit}},
+			runtimeGo:  {Ref: runtimeGo, DependsOn: []ResourceRef{toolGit}},
+			toolGit:    {Ref: toolGit},
+		},
+	}
+	withMetadata := cloneCatalog(base)
+	packageRes := withMetadata.Resources[packageRip]
+	packageRes.Install = &InstallMetadata{Provider: "brew", Package: "ripgrep"}
+	packageRes.Presence = &PresenceMetadata{Kind: "command_exists", Name: "rg"}
+	withMetadata.Resources[packageRip] = packageRes
+	runtimeRes := withMetadata.Resources[runtimeGo]
+	runtimeRes.Install = &InstallMetadata{Provider: "asdf", Package: "golang"}
+	withMetadata.Resources[runtimeGo] = runtimeRes
+
+	request := PlanRequest{Resources: []ResourceRef{packageRip, runtimeGo}}
+	baseResult := BuildPlan(base, request, EnvironmentFacts{}, ConfigState{}, InstallationState{})
+	metaResult := BuildPlan(withMetadata, request, EnvironmentFacts{}, ConfigState{}, InstallationState{})
+
+	if !reflect.DeepEqual(refsFromSteps(baseResult.Plan.Steps), refsFromSteps(metaResult.Plan.Steps)) {
+		t.Fatalf("metadata changed step ordering:\nbase=%#v\nmeta=%#v", baseResult.Plan.Steps, metaResult.Plan.Steps)
+	}
+	if !reflect.DeepEqual(baseResult.Results, metaResult.Results) {
+		t.Fatalf("metadata changed planning results:\nbase=%#v\nmeta=%#v", baseResult.Results, metaResult.Results)
+	}
+}
+
 func refsFromSteps(steps []PlanStep) []ResourceRef {
 	refs := make([]ResourceRef, 0, len(steps))
 	for _, step := range steps {
@@ -403,6 +487,14 @@ func cloneCatalog(catalog Catalog) Catalog {
 		resource.Conditions.OS = append([]string(nil), resource.Conditions.OS...)
 		resource.Conditions.Arch = append([]string(nil), resource.Conditions.Arch...)
 		resource.Conditions.Distro = append([]string(nil), resource.Conditions.Distro...)
+		if resource.Install != nil {
+			install := *resource.Install
+			resource.Install = &install
+		}
+		if resource.Presence != nil {
+			presence := *resource.Presence
+			resource.Presence = &presence
+		}
 		clone.Resources[ref] = resource
 	}
 	return clone

@@ -53,6 +53,74 @@ func TestDecodeValidCatalog(t *testing.T) {
 	}
 }
 
+func TestDecodePreservesMetadata(t *testing.T) {
+	input := `
+schema = "dniebles.catalog"
+version = 1
+
+[[tools]]
+id = "git"
+description = "Version control"
+install = { provider = "apt", package = "git" }
+presence = { kind = "command_exists", name = "git" }
+
+[[packages]]
+id = "ripgrep"
+description = "Fast text search"
+install = { provider = "brew", package = "ripgrep" }
+presence = { kind = "path", name = "rg" }
+
+[[runtimes]]
+id = "go"
+description = "Go toolchain"
+install = { provider = "asdf", package = "golang" }
+
+[[dotfiles]]
+id = "bash"
+description = "Bash dotfiles"
+`
+
+	catalog, err := Decode(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+
+	want := planning.Catalog{
+		Profiles: map[string]planning.Profile{},
+		Bundles:  map[string]planning.Bundle{},
+		Resources: map[planning.ResourceRef]planning.Resource{
+			toolGit: {
+				Ref:         toolGit,
+				Description: "Version control",
+				DependsOn:   []planning.ResourceRef{},
+				Install:     &planning.InstallMetadata{Provider: "apt", Package: "git"},
+				Presence:    &planning.PresenceMetadata{Kind: "command_exists", Name: "git"},
+			},
+			packageRipgrep: {
+				Ref:         packageRipgrep,
+				Description: "Fast text search",
+				DependsOn:   []planning.ResourceRef{},
+				Install:     &planning.InstallMetadata{Provider: "brew", Package: "ripgrep"},
+				Presence:    &planning.PresenceMetadata{Kind: "path", Name: "rg"},
+			},
+			runtimeGo: {
+				Ref:         runtimeGo,
+				Description: "Go toolchain",
+				DependsOn:   []planning.ResourceRef{},
+				Install:     &planning.InstallMetadata{Provider: "asdf", Package: "golang"},
+			},
+			dotBash: {
+				Ref:         dotBash,
+				Description: "Bash dotfiles",
+				DependsOn:   []planning.ResourceRef{},
+			},
+		},
+	}
+	if !reflect.DeepEqual(catalog, want) {
+		t.Fatalf("Decode() = %#v, want %#v", catalog, want)
+	}
+}
+
 func TestDecodeValidationErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -108,6 +176,26 @@ func TestDecodeValidationErrors(t *testing.T) {
 			name:    "unknown bundle ref",
 			input:   "[[profiles]]\nid = \"dev\"\nbundles = [\"cli\"]",
 			wantErr: "unknown bundle",
+		},
+		{
+			name:    "install metadata missing provider",
+			input:   "[[tools]]\nid = \"git\"\ninstall = { package = \"git\" }",
+			wantErr: "install metadata requires non-empty provider and package",
+		},
+		{
+			name:    "install metadata missing package",
+			input:   "[[tools]]\nid = \"git\"\ninstall = { provider = \"apt\" }",
+			wantErr: "install metadata requires non-empty provider and package",
+		},
+		{
+			name:    "presence metadata unsupported kind",
+			input:   "[[tools]]\nid = \"git\"\npresence = { kind = \"registry\", name = \"git\" }",
+			wantErr: "presence metadata has unsupported kind",
+		},
+		{
+			name:    "presence metadata missing name",
+			input:   "[[tools]]\nid = \"git\"\npresence = { kind = \"path\" }",
+			wantErr: "presence metadata requires non-empty kind and name",
 		},
 	}
 
@@ -184,6 +272,32 @@ func TestLoadFileAndBuildPlanFromFixture(t *testing.T) {
 	assertStatus(t, result, toolGit, planning.PlanStepStatusPlanned)
 	assertStatus(t, result, packageRipgrep, planning.PlanStepStatusPlanned)
 	assertStatus(t, result, runtimeGo, planning.PlanStepStatusPlanned)
+
+	for _, step := range result.Plan.Steps {
+		switch step.Ref {
+		case toolGit:
+			if got, want := step.Resource.Install, (&planning.InstallMetadata{Provider: "apt", Package: "git"}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("tool install metadata = %#v, want %#v", got, want)
+			}
+			if got, want := step.Resource.Presence, (&planning.PresenceMetadata{Kind: "command_exists", Name: "git"}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("tool presence metadata = %#v, want %#v", got, want)
+			}
+		case packageRipgrep:
+			if got, want := step.Resource.Install, (&planning.InstallMetadata{Provider: "apt", Package: "ripgrep"}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("package install metadata = %#v, want %#v", got, want)
+			}
+			if got, want := step.Resource.Presence, (&planning.PresenceMetadata{Kind: "command_exists", Name: "rg"}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("package presence metadata = %#v, want %#v", got, want)
+			}
+		case runtimeGo:
+			if got, want := step.Resource.Install, (&planning.InstallMetadata{Provider: "asdf", Package: "golang"}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("runtime install metadata = %#v, want %#v", got, want)
+			}
+			if got, want := step.Resource.Presence, (&planning.PresenceMetadata{Kind: "command_exists", Name: "go"}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("runtime presence metadata = %#v, want %#v", got, want)
+			}
+		}
+	}
 }
 
 func TestDecodeValidCatalogDelegatesSemanticIssuesToPlanner(t *testing.T) {

@@ -14,14 +14,26 @@ type catalogFile struct {
 }
 
 type resourceEntry struct {
-	ID             string   `toml:"id"`
-	Description    string   `toml:"description"`
-	DependsOn      []string `toml:"depends_on"`
-	ConfigRequired []string `toml:"config_required"`
-	OS             []string `toml:"os"`
-	Arch           []string `toml:"arch"`
-	Distro         []string `toml:"distro"`
-	WSL            *bool    `toml:"wsl"`
+	ID             string         `toml:"id"`
+	Description    string         `toml:"description"`
+	DependsOn      []string       `toml:"depends_on"`
+	ConfigRequired []string       `toml:"config_required"`
+	OS             []string       `toml:"os"`
+	Arch           []string       `toml:"arch"`
+	Distro         []string       `toml:"distro"`
+	WSL            *bool          `toml:"wsl"`
+	Install        *installEntry  `toml:"install"`
+	Presence       *presenceEntry `toml:"presence"`
+}
+
+type installEntry struct {
+	Provider string `toml:"provider"`
+	Package  string `toml:"package"`
+}
+
+type presenceEntry struct {
+	Kind string `toml:"kind"`
+	Name string `toml:"name"`
 }
 
 type bundleEntry struct {

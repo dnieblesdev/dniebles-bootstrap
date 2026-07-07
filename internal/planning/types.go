@@ -43,6 +43,20 @@ type Resource struct {
 	DependsOn    []ResourceRef
 	ConfigPolicy ConfigPolicy
 	Conditions   EnvironmentConditions
+	Install      *InstallMetadata
+	Presence     *PresenceMetadata
+}
+
+// InstallMetadata is inert desired-state data for provider selection.
+type InstallMetadata struct {
+	Provider string // e.g. "brew", "apt", "asdf", "go"
+	Package  string // provider-specific package name
+}
+
+// PresenceMetadata is inert desired-state data for detecting existing resources.
+type PresenceMetadata struct {
+	Kind string // initially "path" or "command_exists"
+	Name string // binary/path/check target name
 }
 
 // ConfigPolicy declares configuration that must be visible in planning results.

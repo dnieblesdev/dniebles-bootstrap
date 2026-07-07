@@ -59,6 +59,19 @@ func validate(raw catalogFile) error {
 		}
 	}
 
+	if err := validateResourceMetadata(raw.Tools, planning.ResourceKindTool); err != nil {
+		return err
+	}
+	if err := validateResourceMetadata(raw.Runtimes, planning.ResourceKindRuntime); err != nil {
+		return err
+	}
+	if err := validateResourceMetadata(raw.Packages, planning.ResourceKindPackage); err != nil {
+		return err
+	}
+	if err := validateResourceMetadata(raw.Dotfiles, planning.ResourceKindDotfile); err != nil {
+		return err
+	}
+
 	if err := validateDependencyRefs(raw.Tools, refs, planning.ResourceKindTool); err != nil {
 		return err
 	}
@@ -73,6 +86,34 @@ func validate(raw catalogFile) error {
 	}
 
 	return nil
+}
+
+func validateResourceMetadata(entries []resourceEntry, kind planning.ResourceKind) error {
+	for _, entry := range entries {
+		if entry.Install != nil {
+			if strings.TrimSpace(entry.Install.Provider) == "" || strings.TrimSpace(entry.Install.Package) == "" {
+				return fmt.Errorf("%s %q install metadata requires non-empty provider and package", kind, entry.ID)
+			}
+		}
+		if entry.Presence != nil {
+			if strings.TrimSpace(entry.Presence.Kind) == "" || strings.TrimSpace(entry.Presence.Name) == "" {
+				return fmt.Errorf("%s %q presence metadata requires non-empty kind and name", kind, entry.ID)
+			}
+			if !supportedPresenceKind(entry.Presence.Kind) {
+				return fmt.Errorf("%s %q presence metadata has unsupported kind %q", kind, entry.ID, entry.Presence.Kind)
+			}
+		}
+	}
+	return nil
+}
+
+func supportedPresenceKind(kind string) bool {
+	switch kind {
+	case "path", "command_exists":
+		return true
+	default:
+		return false
+	}
 }
 
 func collectResourceRefs(refs map[planning.ResourceRef]bool, kind planning.ResourceKind, entries []resourceEntry) error {

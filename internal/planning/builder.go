@@ -116,6 +116,7 @@ func (b *planBuilder) appendOrderedSteps() {
 			status = PlanStepStatusAttentionRequired
 		}
 
+		// The resource value is copied as-is so optional metadata is preserved.
 		step := PlanStep{
 			Ref:              ref,
 			Resource:         resource,
