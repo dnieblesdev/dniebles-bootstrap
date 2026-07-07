@@ -73,7 +73,7 @@ It MUST remain separate from the read-only dotfiles detector and MUST NOT own pl
 ### Requirement: Execution contracts remain non-mutating for apply
 
 `internal/execution` MUST remain a safe, non-mutating boundary used by `apply`.
-The command MUST use noop execution contracts only, and MUST NOT introduce real execution, host mutation, installers with side effects, or planning production changes.
+The command MUST use noop execution contracts only, MUST surface Homebrew bootstrap reporting as advisory data only, and MUST NOT introduce real execution, host mutation, installers with side effects, or planning production changes.
 (Previously: The execution slice prohibited any apply command or CLI wiring.)
 
 #### Scenario: Apply uses noop execution contracts only
@@ -87,3 +87,9 @@ The command MUST use noop execution contracts only, and MUST NOT introduce real 
 - GIVEN execution contracts are present
 - WHEN `apply` is reviewed end-to-end
 - THEN no real execution or production mutation occurs
+
+#### Scenario: Bootstrap data stays advisory
+
+- GIVEN Homebrew bootstrap need data is attached
+- WHEN execution contracts report it
+- THEN the data remains non-mutating and reviewable

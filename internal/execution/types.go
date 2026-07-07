@@ -21,7 +21,18 @@ type StepResult struct {
 	Err     error
 }
 
+// ManualAction is a provider-owned, non-mutating action that the operator must
+// perform manually before the plan can be applied. It contains no executable
+// fields and cannot be run by the engine.
+type ManualAction struct {
+	ID           string
+	Title        string
+	Reason       string
+	Instructions []string
+}
+
 // ExecutionReport aggregates the results of executing a plan.
 type ExecutionReport struct {
-	Results []StepResult
+	Results       []StepResult
+	ManualActions []ManualAction
 }

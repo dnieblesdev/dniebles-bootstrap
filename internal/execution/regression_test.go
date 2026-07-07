@@ -71,3 +71,22 @@ func TestApplyRemainsNoopOnlyAndUnwiredFromCommandRunner(t *testing.T) {
 		t.Fatalf("cmd/dbootstrap/main.go no longer wires NoopForKind installers")
 	}
 }
+
+func TestHomebrewBootstrapDoesNotUseCommandRunner(t *testing.T) {
+	path := filepath.Join("homebrew_bootstrap.go")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	src := string(content)
+
+	if strings.Contains(src, "CommandRunner") {
+		t.Fatalf("homebrew_bootstrap.go references CommandRunner; bootstrap must stay detection-only")
+	}
+	if strings.Contains(src, "RunCommand") {
+		t.Fatalf("homebrew_bootstrap.go references RunCommand; bootstrap must stay detection-only")
+	}
+	if strings.Contains(src, "CommandRequest") {
+		t.Fatalf("homebrew_bootstrap.go references CommandRequest; install command is text only")
+	}
+}

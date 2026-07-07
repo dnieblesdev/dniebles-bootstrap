@@ -39,6 +39,7 @@ var (
 	detectInstallationState = state.Detect
 	detectConfigState       = config.Detect
 	detectDotfilesState     = dotfiles.Detect
+	brewCommandExists       = execution.BrewCommandExists
 )
 
 // resourceFlag accumulates repeated --resource values.
@@ -123,6 +124,7 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 		execution.NoopForKind(planning.ResourceKindDotfile),
 	)
 	report := runner.Run(context.Background(), result.Plan)
+	report = execution.AppendHomebrewBootstrap(report, result.Plan, brewCommandExists)
 	renderExecutionReport(stdout, mode, report)
 	return exitSuccess
 }

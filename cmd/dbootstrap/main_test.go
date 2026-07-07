@@ -10,6 +10,8 @@ import (
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 )
 
+const homebrewInstallCommand = `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+
 func TestRunPlanCommand(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -502,7 +504,10 @@ func TestRunApplyCommand(t *testing.T) {
 				"Steps:\n" +
 				"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
 				"2. package:ripgrep [not_implemented] noop installer does not perform real installation\n" +
-				"3. runtime:go [not_implemented] noop installer does not perform real installation\n",
+				"3. runtime:go [not_implemented] noop installer does not perform real installation\n" +
+				"\n" +
+				"Manual Actions:\n" +
+				"- none\n",
 			wantStderr: "",
 		},
 		{
@@ -517,7 +522,10 @@ func TestRunApplyCommand(t *testing.T) {
 				"Steps:\n" +
 				"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
 				"2. package:ripgrep [not_implemented] noop installer does not perform real installation\n" +
-				"3. runtime:go [not_implemented] noop installer does not perform real installation\n",
+				"3. runtime:go [not_implemented] noop installer does not perform real installation\n" +
+				"\n" +
+				"Manual Actions:\n" +
+				"- none\n",
 			wantStderr: "",
 		},
 		{
@@ -532,7 +540,10 @@ func TestRunApplyCommand(t *testing.T) {
 				"Steps:\n" +
 				"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
 				"2. package:ripgrep [not_implemented] noop installer does not perform real installation\n" +
-				"3. runtime:go [not_implemented] noop installer does not perform real installation\n",
+				"3. runtime:go [not_implemented] noop installer does not perform real installation\n" +
+				"\n" +
+				"Manual Actions:\n" +
+				"- none\n",
 			wantStderr: "",
 		},
 		{
@@ -545,7 +556,10 @@ func TestRunApplyCommand(t *testing.T) {
 				"Mode: default-non-mutating\n" +
 				"\n" +
 				"Steps:\n" +
-				"1. tool:git [not_implemented] noop installer does not perform real installation\n",
+				"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
+				"\n" +
+				"Manual Actions:\n" +
+				"- none\n",
 			wantStderr: "",
 		},
 		{
@@ -606,6 +620,124 @@ func TestRunApplyCommand(t *testing.T) {
 			}
 			if got := stderr.String(); got != tt.wantStderr {
 				t.Fatalf("stderr = %q, want %q", got, tt.wantStderr)
+			}
+		})
+	}
+}
+
+func TestRunApplyHomebrewBootstrap(t *testing.T) {
+	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `
+schema = "dniebles.catalog"
+version = 1
+
+[[tools]]
+id = "fd"
+description = "Fast find alternative"
+[tools.install]
+provider = "brew"
+package = "fd"
+[tools.presence]
+kind = "command_exists"
+name = "fd"
+
+[[profiles]]
+id = "dev"
+resources = ["tool:fd"]
+`)
+
+	tests := []struct {
+		name           string
+		args           []string
+		brewExists     bool
+		wantCode       int
+		wantContains   []string
+		wantNotContain string
+	}{
+		{
+			name:       "default apply reports manual bootstrap when brew is missing",
+			args:       []string{"apply", "--profile", "dev", "--catalog", catalogPath},
+			brewExists: false,
+			wantCode:   exitSuccess,
+			wantContains: []string{
+				"Execution Report",
+				"Mode: default-non-mutating",
+				"tool:fd [not_implemented]",
+				"Manual Actions:",
+				"homebrew:bootstrap: Install Homebrew",
+				"Homebrew is required by selected resources",
+				homebrewInstallCommand,
+			},
+		},
+		{
+			name:       "dry run reports manual bootstrap when brew is missing",
+			args:       []string{"apply", "--profile", "dev", "--catalog", catalogPath, "--dry-run"},
+			brewExists: false,
+			wantCode:   exitSuccess,
+			wantContains: []string{
+				"Execution Report",
+				"Mode: dry-run",
+				"Manual Actions:",
+				"homebrew:bootstrap: Install Homebrew",
+			},
+		},
+		{
+			name:       "yes mode reports manual bootstrap when brew is missing",
+			args:       []string{"apply", "--profile", "dev", "--catalog", catalogPath, "--yes"},
+			brewExists: false,
+			wantCode:   exitSuccess,
+			wantContains: []string{
+				"Execution Report",
+				"Mode: confirmed-future-noop",
+				"Manual Actions:",
+				"homebrew:bootstrap: Install Homebrew",
+			},
+		},
+		{
+			name:       "brew present does not trigger bootstrap",
+			args:       []string{"apply", "--profile", "dev", "--catalog", catalogPath},
+			brewExists: true,
+			wantCode:   exitSuccess,
+			wantContains: []string{
+				"Execution Report",
+				"Manual Actions:\n- none\n",
+			},
+			wantNotContain: "homebrew:bootstrap",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+			stubInstallationState(t, planning.InstallationState{})
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+			originalBrew := brewCommandExists
+			brewCommandExists = func(name string) bool {
+				if name != "brew" {
+					t.Fatalf("expected lookup for brew, got %q", name)
+				}
+				return tt.brewExists
+			}
+			t.Cleanup(func() { brewCommandExists = originalBrew })
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			gotCode := run(tt.args, &stdout, &stderr)
+
+			if gotCode != tt.wantCode {
+				t.Fatalf("run() exit code = %d, want %d", gotCode, tt.wantCode)
+			}
+			out := stdout.String()
+			for _, want := range tt.wantContains {
+				if !strings.Contains(out, want) {
+					t.Fatalf("stdout missing %q; got %q", want, out)
+				}
+			}
+			if tt.wantNotContain != "" && strings.Contains(out, tt.wantNotContain) {
+				t.Fatalf("stdout unexpectedly contains %q; got %q", tt.wantNotContain, out)
+			}
+			if stderr.String() != "" {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
 			}
 		})
 	}

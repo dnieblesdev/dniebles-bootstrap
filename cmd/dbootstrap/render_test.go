@@ -120,7 +120,49 @@ func TestRenderExecutionReportIsDistinctFromPlanRendering(t *testing.T) {
 		"\n" +
 		"Steps:\n" +
 		"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
-		"2. package:ripgrep [not_implemented] noop installer does not perform real installation\n"
+		"2. package:ripgrep [not_implemented] noop installer does not perform real installation\n" +
+		"\n" +
+		"Manual Actions:\n" +
+		"- none\n"
+	if got := stdout.String(); got != wantStdout {
+		t.Fatalf("stdout = %q, want %q", got, wantStdout)
+	}
+}
+
+func TestRenderExecutionReportRendersManualActions(t *testing.T) {
+	report := execution.ExecutionReport{
+		Results: []execution.StepResult{
+			{Ref: planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "fd"}, Status: execution.StepStatusNotImplemented, Message: "noop installer does not perform real installation"},
+		},
+		ManualActions: []execution.ManualAction{
+			{
+				ID:     "homebrew:bootstrap",
+				Title:  "Install Homebrew",
+				Reason: "Homebrew is required by selected resources but is not installed on this host.",
+				Instructions: []string{
+					"Run the official Homebrew install command manually:",
+					`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`,
+					"After installation, re-run dbootstrap apply to continue.",
+				},
+			},
+		},
+	}
+
+	var stdout bytes.Buffer
+	renderExecutionReport(&stdout, applyModeDryRun, report)
+
+	wantStdout := "Execution Report\n" +
+		"Mode: dry-run\n" +
+		"\n" +
+		"Steps:\n" +
+		"1. tool:fd [not_implemented] noop installer does not perform real installation\n" +
+		"\n" +
+		"Manual Actions:\n" +
+		"- homebrew:bootstrap: Install Homebrew\n" +
+		"  reason: Homebrew is required by selected resources but is not installed on this host.\n" +
+		"  instruction: Run the official Homebrew install command manually:\n" +
+		"  instruction: /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"\n" +
+		"  instruction: After installation, re-run dbootstrap apply to continue.\n"
 	if got := stdout.String(); got != wantStdout {
 		t.Fatalf("stdout = %q, want %q", got, wantStdout)
 	}
@@ -134,6 +176,9 @@ func TestRenderExecutionReportHandlesEmptyReport(t *testing.T) {
 		"Mode: default-non-mutating\n" +
 		"\n" +
 		"Steps:\n" +
+		"- none\n" +
+		"\n" +
+		"Manual Actions:\n" +
 		"- none\n"
 	if got := stdout.String(); got != wantStdout {
 		t.Fatalf("stdout = %q, want %q", got, wantStdout)

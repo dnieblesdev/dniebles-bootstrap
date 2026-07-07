@@ -58,14 +58,28 @@ func renderExecutionReport(w io.Writer, mode applyMode, report execution.Executi
 	fmt.Fprintln(w, "Steps:")
 	if len(report.Results) == 0 {
 		fmt.Fprintln(w, "- none")
+	} else {
+		for index, result := range report.Results {
+			fmt.Fprintf(w, "%d. %s [%s]", index+1, renderRef(result.Ref), result.Status)
+			if result.Message != "" {
+				fmt.Fprintf(w, " %s", result.Message)
+			}
+			fmt.Fprintln(w)
+		}
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Manual Actions:")
+	if len(report.ManualActions) == 0 {
+		fmt.Fprintln(w, "- none")
 		return
 	}
-	for index, result := range report.Results {
-		fmt.Fprintf(w, "%d. %s [%s]", index+1, renderRef(result.Ref), result.Status)
-		if result.Message != "" {
-			fmt.Fprintf(w, " %s", result.Message)
+	for _, action := range report.ManualActions {
+		fmt.Fprintf(w, "- %s: %s\n", action.ID, action.Title)
+		fmt.Fprintf(w, "  reason: %s\n", action.Reason)
+		for _, instruction := range action.Instructions {
+			fmt.Fprintf(w, "  instruction: %s\n", instruction)
 		}
-		fmt.Fprintln(w)
 	}
 }
 
