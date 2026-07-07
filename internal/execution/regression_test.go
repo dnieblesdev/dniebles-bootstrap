@@ -52,3 +52,22 @@ func TestNoopExecutionRemainsNonMutating(t *testing.T) {
 		t.Fatalf("RunDotlink error = %v, want ErrNotImplemented", err)
 	}
 }
+
+func TestApplyRemainsNoopOnlyAndUnwiredFromCommandRunner(t *testing.T) {
+	mainPath := filepath.Join("..", "..", "cmd", "dbootstrap", "main.go")
+	content, err := os.ReadFile(mainPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", mainPath, err)
+	}
+	src := string(content)
+
+	if strings.Contains(src, "CommandRunner") {
+		t.Fatalf("cmd/dbootstrap/main.go references CommandRunner; apply must stay noop-only")
+	}
+	if strings.Contains(src, "RunCommand") {
+		t.Fatalf("cmd/dbootstrap/main.go references RunCommand; apply must stay noop-only")
+	}
+	if !strings.Contains(src, "NoopForKind") {
+		t.Fatalf("cmd/dbootstrap/main.go no longer wires NoopForKind installers")
+	}
+}
