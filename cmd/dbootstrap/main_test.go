@@ -491,12 +491,13 @@ func TestRunApplyCommand(t *testing.T) {
 		wantStderr        string
 	}{
 		{
-			name:              "dry run profile renders not implemented execution report",
+			name:              "default apply profile renders not implemented execution report",
 			args:              []string{"apply", "--profile", "dev", "--catalog", "../../catalog/bootstrap.toml"},
 			installationState: planning.InstallationState{},
 			configState:       planning.ConfigState{},
 			wantCode:          exitSuccess,
 			wantStdout: "Execution Report\n" +
+				"Mode: default-non-mutating\n" +
 				"\n" +
 				"Steps:\n" +
 				"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
@@ -505,12 +506,43 @@ func TestRunApplyCommand(t *testing.T) {
 			wantStderr: "",
 		},
 		{
-			name:              "dry run resource only renders single step",
+			name:              "explicit dry run renders dry run mode",
+			args:              []string{"apply", "--profile", "dev", "--catalog", "../../catalog/bootstrap.toml", "--dry-run"},
+			installationState: planning.InstallationState{},
+			configState:       planning.ConfigState{},
+			wantCode:          exitSuccess,
+			wantStdout: "Execution Report\n" +
+				"Mode: dry-run\n" +
+				"\n" +
+				"Steps:\n" +
+				"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
+				"2. package:ripgrep [not_implemented] noop installer does not perform real installation\n" +
+				"3. runtime:go [not_implemented] noop installer does not perform real installation\n",
+			wantStderr: "",
+		},
+		{
+			name:              "yes flag renders confirmed future noop mode",
+			args:              []string{"apply", "--profile", "dev", "--catalog", "../../catalog/bootstrap.toml", "--yes"},
+			installationState: planning.InstallationState{},
+			configState:       planning.ConfigState{},
+			wantCode:          exitSuccess,
+			wantStdout: "Execution Report\n" +
+				"Mode: confirmed-future-noop\n" +
+				"\n" +
+				"Steps:\n" +
+				"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
+				"2. package:ripgrep [not_implemented] noop installer does not perform real installation\n" +
+				"3. runtime:go [not_implemented] noop installer does not perform real installation\n",
+			wantStderr: "",
+		},
+		{
+			name:              "resource only renders single step",
 			args:              []string{"apply", "--resource", "tool:git", "--catalog", "../../catalog/bootstrap.toml"},
 			installationState: planning.InstallationState{},
 			configState:       planning.ConfigState{},
 			wantCode:          exitSuccess,
 			wantStdout: "Execution Report\n" +
+				"Mode: default-non-mutating\n" +
 				"\n" +
 				"Steps:\n" +
 				"1. tool:git [not_implemented] noop installer does not perform real installation\n",
@@ -521,14 +553,21 @@ func TestRunApplyCommand(t *testing.T) {
 			args:       []string{"apply"},
 			wantCode:   exitUsage,
 			wantStdout: "",
-			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>]\nerror: --profile or --resource is required\n",
+			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes]\nerror: --profile or --resource is required\n",
+		},
+		{
+			name:       "dry run and yes cannot be combined",
+			args:       []string{"apply", "--profile", "dev", "--catalog", "../../catalog/bootstrap.toml", "--dry-run", "--yes"},
+			wantCode:   exitUsage,
+			wantStdout: "",
+			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes]\nerror: --dry-run and --yes cannot be combined\n",
 		},
 		{
 			name:       "malformed resource ref is rejected",
 			args:       []string{"apply", "--resource", "git", "--catalog", "../../catalog/bootstrap.toml"},
 			wantCode:   exitUsage,
 			wantStdout: "",
-			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>]\nerror: invalid resource ref \"git\": expected kind:name\n",
+			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes]\nerror: invalid resource ref \"git\": expected kind:name\n",
 		},
 		{
 			name:     "unknown profile exits with plan diagnostics and no execution report",

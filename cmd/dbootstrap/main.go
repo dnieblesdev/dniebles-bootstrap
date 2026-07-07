@@ -25,6 +25,15 @@ const (
 	exitUsage   = 2
 )
 
+// applyMode describes the safety mode selected for the apply command.
+type applyMode string
+
+const (
+	applyModeDefaultNonMutating applyMode = "default-non-mutating"
+	applyModeDryRun             applyMode = "dry-run"
+	applyModeConfirmedFuture    applyMode = "confirmed-future-noop"
+)
+
 var (
 	detectEnvironmentFacts  = environment.Detect
 	detectInstallationState = state.Detect
@@ -90,7 +99,7 @@ func runPlan(args []string, stdout, stderr io.Writer) int {
 }
 
 func runApply(args []string, stdout, stderr io.Writer) int {
-	request, catalogPath, ok := parsePlanFlags("apply", args, stderr)
+	request, catalogPath, mode, ok := parseApplyFlags(args, stderr)
 	if !ok {
 		return exitUsage
 	}
@@ -114,8 +123,62 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 		execution.NoopForKind(planning.ResourceKindDotfile),
 	)
 	report := runner.Run(context.Background(), result.Plan)
-	renderExecutionReport(stdout, report)
+	renderExecutionReport(stdout, mode, report)
 	return exitSuccess
+}
+
+// parseApplyFlags parses the apply-specific flags and the shared plan target
+// surface. It validates that conflicting safety flags are not combined and
+// returns the selected apply mode along with the plan request.
+func parseApplyFlags(args []string, stderr io.Writer) (planning.PlanRequest, string, applyMode, bool) {
+	flags := flag.NewFlagSet("apply", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	profile := flags.String("profile", "", "profile name to plan")
+	var resources resourceFlag
+	flags.Var(&resources, "resource", "resource target as kind:name (may be repeated)")
+	catalogPath := flags.String("catalog", defaultCatalogPath, "catalog TOML file path")
+	dryRun := flags.Bool("dry-run", false, "run in non-mutating dry-run mode")
+	yes := flags.Bool("yes", false, "reserved future confirmed-mode opt-in (currently noop)")
+
+	if err := flags.Parse(args); err != nil {
+		printApplyUsage(stderr)
+		return planning.PlanRequest{}, "", "", false
+	}
+	if flags.NArg() > 0 {
+		printApplyUsage(stderr)
+		fmt.Fprintf(stderr, "error: unexpected argument %q\n", flags.Arg(0))
+		return planning.PlanRequest{}, "", "", false
+	}
+
+	if *dryRun && *yes {
+		printApplyUsage(stderr)
+		fmt.Fprintln(stderr, "error: --dry-run and --yes cannot be combined")
+		return planning.PlanRequest{}, "", "", false
+	}
+
+	resourceRefs, err := parseResourceRefs(resources.values)
+	if err != nil {
+		printApplyUsage(stderr)
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return planning.PlanRequest{}, "", "", false
+	}
+	resourceRefs = dedupeResourceRefs(resourceRefs)
+
+	if *profile == "" && len(resourceRefs) == 0 {
+		printApplyUsage(stderr)
+		fmt.Fprintln(stderr, "error: --profile or --resource is required")
+		return planning.PlanRequest{}, "", "", false
+	}
+
+	mode := applyModeDefaultNonMutating
+	if *dryRun {
+		mode = applyModeDryRun
+	} else if *yes {
+		mode = applyModeConfirmedFuture
+	}
+
+	return planning.PlanRequest{Profile: *profile, Resources: resourceRefs}, *catalogPath, mode, true
 }
 
 // parsePlanFlags parses the shared target surface used by plan and apply.
@@ -227,7 +290,7 @@ func printPlanUsage(w io.Writer) {
 }
 
 func printApplyUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>]")
+	fmt.Fprintln(w, "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes]")
 }
 
 func parseResourceRef(value string) (planning.ResourceRef, error) {

@@ -113,9 +113,10 @@ func TestRenderExecutionReportIsDistinctFromPlanRendering(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	renderExecutionReport(&stdout, report)
+	renderExecutionReport(&stdout, applyModeDryRun, report)
 
 	wantStdout := "Execution Report\n" +
+		"Mode: dry-run\n" +
 		"\n" +
 		"Steps:\n" +
 		"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
@@ -127,9 +128,10 @@ func TestRenderExecutionReportIsDistinctFromPlanRendering(t *testing.T) {
 
 func TestRenderExecutionReportHandlesEmptyReport(t *testing.T) {
 	var stdout bytes.Buffer
-	renderExecutionReport(&stdout, execution.ExecutionReport{})
+	renderExecutionReport(&stdout, applyModeDefaultNonMutating, execution.ExecutionReport{})
 
 	wantStdout := "Execution Report\n" +
+		"Mode: default-non-mutating\n" +
 		"\n" +
 		"Steps:\n" +
 		"- none\n"

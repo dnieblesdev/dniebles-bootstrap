@@ -51,8 +51,9 @@ func renderPlanResult(w io.Writer, profile string, resources []planning.Resource
 	}
 }
 
-func renderExecutionReport(w io.Writer, report execution.ExecutionReport) {
+func renderExecutionReport(w io.Writer, mode applyMode, report execution.ExecutionReport) {
 	fmt.Fprintln(w, "Execution Report")
+	fmt.Fprintf(w, "Mode: %s\n", mode)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Steps:")
 	if len(report.Results) == 0 {
