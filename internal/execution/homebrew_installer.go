@@ -24,7 +24,7 @@ var (
 )
 
 // HomebrewInstaller installs brew-backed resources through explicit command
-// requests. It is an isolated component and is not wired into apply.
+// requests. CLI composition decides when it is safe to wire this installer.
 type HomebrewInstaller struct {
 	kind   planning.ResourceKind
 	runner CommandRunner

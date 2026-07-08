@@ -73,20 +73,26 @@ It MUST remain separate from the read-only dotfiles detector and MUST NOT own pl
 ### Requirement: Execution contracts remain non-mutating for apply
 
 `internal/execution` MUST remain a safe, non-mutating boundary used by `apply`.
-The command MUST use noop execution contracts only, MUST surface Homebrew bootstrap reporting as advisory data only, and MUST NOT introduce real execution, host mutation, installers with side effects, or planning production changes.
-(Previously: The execution slice prohibited any apply command or CLI wiring.)
+The command MUST use noop execution contracts by default and in `--dry-run`, MUST allow real execution only for confirmed brew-backed tool/package steps, MUST surface Homebrew bootstrap reporting as advisory data only, and MUST NOT introduce real execution outside that narrow path.
+(Previously: execution contracts were entirely noop for apply.)
 
-#### Scenario: Apply uses noop execution contracts only
+#### Scenario: Apply uses noop execution contracts by default
 
-- GIVEN the `apply` command runs
+- GIVEN the `apply` command runs without `--yes`
 - WHEN execution is dispatched
 - THEN only noop results are produced
 
-#### Scenario: Side effects remain absent
+#### Scenario: Confirmed brew steps may execute
+
+- GIVEN `apply --yes` and a brew-backed tool/package step
+- WHEN execution is dispatched
+- THEN real brew execution is allowed for that step only
+
+#### Scenario: Side effects remain absent outside confirmed brew steps
 
 - GIVEN execution contracts are present
 - WHEN `apply` is reviewed end-to-end
-- THEN no real execution or production mutation occurs
+- THEN no real execution or production mutation occurs outside confirmed brew-backed steps
 
 #### Scenario: Bootstrap data stays advisory
 

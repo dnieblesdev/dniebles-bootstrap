@@ -17,7 +17,7 @@ func BrewCommandExists(name string) bool {
 	return err == nil
 }
 
-const homebrewInstallInstruction = `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+const homebrewDocumentationURL = "https://brew.sh/"
 
 // AppendHomebrewBootstrap enriches report with a manual Homebrew bootstrap
 // action when the plan contains brew-backed resources and brew is not present
@@ -36,9 +36,9 @@ func AppendHomebrewBootstrap(report ExecutionReport, plan planning.Plan, exists 
 		Title:  "Install Homebrew",
 		Reason: "Homebrew is required by selected resources but is not installed on this host.",
 		Instructions: []string{
-			"Run the official Homebrew install command manually:",
-			homebrewInstallInstruction,
-			"After installation, re-run dbootstrap apply to continue.",
+			"Review the official Homebrew installation documentation before making host changes:",
+			homebrewDocumentationURL,
+			"Install Homebrew manually only after you understand the documented steps, then re-run dbootstrap apply.",
 		},
 	})
 	return report

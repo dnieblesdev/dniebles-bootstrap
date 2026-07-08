@@ -44,11 +44,11 @@ Planning failures MUST stop the command before execution begins.
 - WHEN `dbootstrap apply` runs
 - THEN the resulting plan is passed into execution
 
-### Requirement: Apply renders a noop execution report
+### Requirement: Apply renders execution mode-specific reporting
 
 The `apply` command MUST render an execution report separate from plan rendering.
-Successful dry-run execution MUST report `not_implemented` results and MUST NOT imply real work completed.
-Homebrew bootstrap reporting MUST remain advisory and non-mutating in every accepted mode.
+Successful dry-run execution MUST report `not_implemented` results, while confirmed mode MAY report real brew execution for brew-backed tool/package steps only.
+Homebrew bootstrap reporting MUST remain advisory and non-mutating in default and `--dry-run` modes.
 
 #### Scenario: Dry-run execution reports not_implemented
 
@@ -63,16 +63,16 @@ Homebrew bootstrap reporting MUST remain advisory and non-mutating in every acce
 - THEN apply output is clearly labeled as execution reporting
 - AND plan rendering remains separate
 
-#### Scenario: Bootstrap reporting does not become execution
+#### Scenario: Confirmed brew steps can report real execution
 
-- GIVEN Homebrew bootstrap guidance is shown
-- WHEN the apply report is rendered
-- THEN the guidance is advisory only
-- AND no execution step is treated as completed
+- GIVEN a brew-backed tool or package step is present
+- WHEN `dbootstrap apply --yes` runs the execution phase
+- THEN the step may report real brew execution
+- AND other step kinds remain non-mutating or unsupported
 
 ### Requirement: Apply remains strictly non-mutating
 
-The `apply` command MUST NOT perform real execution, host mutation, dotlink, clone, sparse checkout, retry, or concurrency behavior.
+The `apply` command MUST NOT perform real execution, host mutation, dotlink, clone, sparse checkout, retry, or concurrency behavior in default mode.
 It MUST remain a safe noop bridge over the existing plan.
 
 #### Scenario: No host mutation occurs
@@ -89,8 +89,8 @@ It MUST remain a safe noop bridge over the existing plan.
 
 ### Requirement: Apply mode is explicit and safe by default
 
-The `apply` command MUST treat the default mode as non-mutating, MUST treat `--dry-run` as explicit non-mutating, and MUST treat `--yes` as a reserved future confirmed-mode opt-in.
-The command MUST keep Homebrew bootstrap reporting non-mutating in all modes.
+The `apply` command MUST treat the default mode as non-mutating, MUST treat `--dry-run` as explicit non-mutating, and MUST treat `--yes` as the only confirmed mode that may mutate for brew-backed tool/package steps.
+The command MUST keep Homebrew bootstrap reporting non-mutating in default and `--dry-run` modes.
 
 #### Scenario: Default apply is non-mutating
 
@@ -106,12 +106,12 @@ The command MUST keep Homebrew bootstrap reporting non-mutating in all modes.
 - THEN the selected mode is reported as dry-run
 - AND no host mutation is performed
 
-#### Scenario: Bootstrap guidance remains non-mutating under yes
+#### Scenario: Yes is the only confirmed mutating mode
 
-- GIVEN the user runs `dbootstrap apply --yes` on a host without `brew`
+- GIVEN the user runs `dbootstrap apply --yes` with a brew-backed tool or package step
 - WHEN the command executes
-- THEN bootstrap guidance may be reported
-- AND no host mutation is performed
+- THEN the selected mode is reported as confirmed mode
+- AND real brew installation may be attempted only for that step
 
 ### Requirement: Conflicting safety flags are rejected
 
@@ -124,47 +124,26 @@ The `apply` command MUST reject `--dry-run --yes` as invalid input and MUST retu
 - THEN the command fails with a usage error
 - AND no execution result is produced
 
-### Requirement: Confirmed mode is reserved but not wired
+### Requirement: Confirmed mode only wires brew-backed installs
 
-The `apply` command MUST accept `--yes` as a future mutation opt-in marker, but this slice MUST NOT wire real installer, CommandRunner, Homebrew bootstrap, or remote script mutation behind it.
+The `apply` command MUST wire real execution only for brew-backed `tool` and `package` steps when `--yes` is set.
+Runtime, dotfile, and non-brew steps MUST remain noop or unsupported.
 
-#### Scenario: Yes is accepted without mutation wiring
+#### Scenario: Brew-backed steps may execute under yes
 
-- GIVEN the user runs `dbootstrap apply --yes`
-- WHEN the command executes
-- THEN the selected mode is reported as confirmed future mode
-- AND execution remains non-mutating
+- GIVEN a brew-backed `tool` step and `--yes`
+- WHEN apply executes
+- THEN the step is eligible for real brew installation
 
-#### Scenario: No real mutation surfaces are active
+#### Scenario: Non-brew steps stay non-mutating
 
-- GIVEN the apply command completes in any accepted mode
-- WHEN the execution path is observed
-- THEN no real installer, CommandRunner, Homebrew, or remote script mutation is invoked
-- AND raw command metadata is not exposed
-
-## MODIFIED Requirements
-
-### Requirement: Explicit no-apply, no-real-execution, no-mutation boundary → Execution contracts remain non-mutating for apply
-
-`internal/execution` MUST remain a safe, non-mutating boundary used by `apply`.
-The command MUST use noop execution contracts only, and MUST NOT introduce real execution, host mutation, installers with side effects, or planning production changes.
-(Previously: The execution slice prohibited any apply command or CLI wiring.)
-
-#### Scenario: Apply uses noop execution contracts only
-
-- GIVEN the `apply` command runs
-- WHEN execution is dispatched
-- THEN only noop results are produced
-
-#### Scenario: Side effects remain absent
-
-- GIVEN execution contracts are present
-- WHEN `apply` is reviewed end-to-end
-- THEN no real execution or production mutation occurs
+- GIVEN a runtime or dotfile step and `--yes`
+- WHEN apply executes
+- THEN the step remains noop or returns unsupported
 
 ## REMOVED Requirements
 
 ### Requirement: No apply command is introduced
 
-(Reason: `apply` is now intentionally added as a dry-run-only CLI bridge.)
+(Reason: `apply` is now intentionally added as a functional CLI bridge: default and `--dry-run` stay non-mutating, while `--yes` may run the narrow confirmed Homebrew path.)
 (Migration: Replace this gate with functional `apply` coverage.)

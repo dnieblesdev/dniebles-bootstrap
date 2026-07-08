@@ -54,6 +54,9 @@ func renderPlanResult(w io.Writer, profile string, resources []planning.Resource
 func renderExecutionReport(w io.Writer, mode applyMode, report execution.ExecutionReport) {
 	fmt.Fprintln(w, "Execution Report")
 	fmt.Fprintf(w, "Mode: %s\n", mode)
+	if mode == applyModeConfirmed {
+		fmt.Fprintln(w, "Warning: confirmed mode may run real brew install commands for brew-backed tool/package resources.")
+	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Steps:")
 	if len(report.Results) == 0 {
@@ -69,6 +72,10 @@ func renderExecutionReport(w io.Writer, mode applyMode, report execution.Executi
 	}
 
 	fmt.Fprintln(w)
+	renderManualActions(w, report)
+}
+
+func renderManualActions(w io.Writer, report execution.ExecutionReport) {
 	fmt.Fprintln(w, "Manual Actions:")
 	if len(report.ManualActions) == 0 {
 		fmt.Fprintln(w, "- none")

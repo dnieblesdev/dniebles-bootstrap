@@ -31,7 +31,7 @@ type applyMode string
 const (
 	applyModeDefaultNonMutating applyMode = "default-non-mutating"
 	applyModeDryRun             applyMode = "dry-run"
-	applyModeConfirmedFuture    applyMode = "confirmed-future-noop"
+	applyModeConfirmed          applyMode = "confirmed"
 )
 
 var (
@@ -40,6 +40,10 @@ var (
 	detectConfigState       = config.Detect
 	detectDotfilesState     = dotfiles.Detect
 	brewCommandExists       = execution.BrewCommandExists
+	newOSCommandRunner      = func() execution.CommandRunner { return execution.NewOSCommandRunner() }
+	newHomebrewInstaller    = func(kind planning.ResourceKind, runner execution.CommandRunner, exists execution.CommandExists) execution.Installer {
+		return execution.NewHomebrewInstaller(kind, runner, exists)
+	}
 )
 
 // resourceFlag accumulates repeated --resource values.
@@ -117,16 +121,90 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
-	runner := execution.NewRunner(
+	runner := buildApplyRunner(mode, result.Plan)
+	report := runner.Run(context.Background(), result.Plan)
+	report = appendApplyBootstrap(report, result.Plan)
+	renderExecutionReport(stdout, mode, report)
+	return exitSuccess
+}
+
+func buildApplyRunner(mode applyMode, plan planning.Plan) *execution.Runner {
+	if mode != applyModeConfirmed {
+		return newNoopApplyRunner()
+	}
+
+	if !planHasBrewBackedInstall(plan) {
+		return newProviderAwareNoopRunner()
+	}
+
+	if !brewCommandExists("brew") {
+		return execution.NewRunner(
+			execution.BrewOnlyInstaller(planning.ResourceKindTool, missingHomebrewInstaller{kind: planning.ResourceKindTool}),
+			execution.NoopForKind(planning.ResourceKindRuntime),
+			execution.BrewOnlyInstaller(planning.ResourceKindPackage, missingHomebrewInstaller{kind: planning.ResourceKindPackage}),
+			execution.NoopForKind(planning.ResourceKindDotfile),
+		)
+	}
+
+	runner := newOSCommandRunner()
+	return execution.NewRunner(
+		execution.BrewOnlyInstaller(planning.ResourceKindTool, newHomebrewInstaller(planning.ResourceKindTool, runner, brewCommandExists)),
+		execution.NoopForKind(planning.ResourceKindRuntime),
+		execution.BrewOnlyInstaller(planning.ResourceKindPackage, newHomebrewInstaller(planning.ResourceKindPackage, runner, brewCommandExists)),
+		execution.NoopForKind(planning.ResourceKindDotfile),
+	)
+}
+
+func newProviderAwareNoopRunner() *execution.Runner {
+	return execution.NewRunner(
+		execution.BrewOnlyInstaller(planning.ResourceKindTool, nil),
+		execution.NoopForKind(planning.ResourceKindRuntime),
+		execution.BrewOnlyInstaller(planning.ResourceKindPackage, nil),
+		execution.NoopForKind(planning.ResourceKindDotfile),
+	)
+}
+
+func newNoopApplyRunner() *execution.Runner {
+	return execution.NewRunner(
 		execution.NoopForKind(planning.ResourceKindTool),
 		execution.NoopForKind(planning.ResourceKindRuntime),
 		execution.NoopForKind(planning.ResourceKindPackage),
 		execution.NoopForKind(planning.ResourceKindDotfile),
 	)
-	report := runner.Run(context.Background(), result.Plan)
-	report = execution.AppendHomebrewBootstrap(report, result.Plan, brewCommandExists)
-	renderExecutionReport(stdout, mode, report)
-	return exitSuccess
+}
+
+func appendApplyBootstrap(report execution.ExecutionReport, plan planning.Plan) execution.ExecutionReport {
+	if !planHasBrewBackedInstall(plan) {
+		return report
+	}
+	brewExists := brewCommandExists("brew")
+	return execution.AppendHomebrewBootstrap(report, plan, func(name string) bool {
+		return name == "brew" && brewExists
+	})
+}
+
+func planHasBrewBackedInstall(plan planning.Plan) bool {
+	for _, step := range plan.Steps {
+		if step.Resource.Install != nil && step.Resource.Install.Provider == "brew" {
+			return true
+		}
+	}
+	return false
+}
+
+type missingHomebrewInstaller struct {
+	kind planning.ResourceKind
+}
+
+func (i missingHomebrewInstaller) SupportedKind() planning.ResourceKind { return i.kind }
+
+func (i missingHomebrewInstaller) Install(_ context.Context, step planning.PlanStep) execution.StepResult {
+	return execution.StepResult{
+		Ref:     step.Ref,
+		Status:  execution.StepStatusSkipped,
+		Message: "skipped because Homebrew must be installed manually before brew-backed resources can be applied",
+		Err:     execution.ErrMissingHomebrew,
+	}
 }
 
 // parseApplyFlags parses the apply-specific flags and the shared plan target
@@ -141,7 +219,7 @@ func parseApplyFlags(args []string, stderr io.Writer) (planning.PlanRequest, str
 	flags.Var(&resources, "resource", "resource target as kind:name (may be repeated)")
 	catalogPath := flags.String("catalog", defaultCatalogPath, "catalog TOML file path")
 	dryRun := flags.Bool("dry-run", false, "run in non-mutating dry-run mode")
-	yes := flags.Bool("yes", false, "reserved future confirmed-mode opt-in (currently noop)")
+	yes := flags.Bool("yes", false, "confirmed mode; may run real brew install commands for brew-backed tool/package resources")
 
 	if err := flags.Parse(args); err != nil {
 		printApplyUsage(stderr)
@@ -177,7 +255,7 @@ func parseApplyFlags(args []string, stderr io.Writer) (planning.PlanRequest, str
 	if *dryRun {
 		mode = applyModeDryRun
 	} else if *yes {
-		mode = applyModeConfirmedFuture
+		mode = applyModeConfirmed
 	}
 
 	return planning.PlanRequest{Profile: *profile, Resources: resourceRefs}, *catalogPath, mode, true
@@ -275,7 +353,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  plan    Build a deterministic plan for a profile")
-	fmt.Fprintln(w, "  apply   Run a dry-run execution of the plan (noop only)")
+	fmt.Fprintln(w, "  apply   Execute the plan safely; only --yes may run brew-backed installs")
 }
 
 func printCommandUsage(command string, w io.Writer) {

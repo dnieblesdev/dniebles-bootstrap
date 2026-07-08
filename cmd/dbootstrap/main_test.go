@@ -2,15 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/dnieblesdev/dniebles-bootstrap/internal/execution"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 )
 
-const homebrewInstallCommand = `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+const homebrewDocumentationURL = "https://brew.sh/"
 
 func TestRunPlanCommand(t *testing.T) {
 	tests := []struct {
@@ -415,7 +417,7 @@ func TestRunUsageErrors(t *testing.T) {
 				"\n" +
 				"Commands:\n" +
 				"  plan    Build a deterministic plan for a profile\n" +
-				"  apply   Run a dry-run execution of the plan (noop only)\n" +
+				"  apply   Execute the plan safely; only --yes may run brew-backed installs\n" +
 				"error: command is required\n",
 		},
 		{
@@ -425,7 +427,7 @@ func TestRunUsageErrors(t *testing.T) {
 				"\n" +
 				"Commands:\n" +
 				"  plan    Build a deterministic plan for a profile\n" +
-				"  apply   Run a dry-run execution of the plan (noop only)\n" +
+				"  apply   Execute the plan safely; only --yes may run brew-backed installs\n" +
 				"error: unknown command \"deploy\"\n",
 		},
 	}
@@ -529,17 +531,18 @@ func TestRunApplyCommand(t *testing.T) {
 			wantStderr: "",
 		},
 		{
-			name:              "yes flag renders confirmed future noop mode",
+			name:              "yes flag renders confirmed mode with missing brew guidance",
 			args:              []string{"apply", "--profile", "dev", "--catalog", "../../catalog/bootstrap.toml", "--yes"},
 			installationState: planning.InstallationState{},
 			configState:       planning.ConfigState{},
 			wantCode:          exitSuccess,
 			wantStdout: "Execution Report\n" +
-				"Mode: confirmed-future-noop\n" +
+				"Mode: confirmed\n" +
+				"Warning: confirmed mode may run real brew install commands for brew-backed tool/package resources.\n" +
 				"\n" +
 				"Steps:\n" +
-				"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
-				"2. package:ripgrep [not_implemented] noop installer does not perform real installation\n" +
+				"1. tool:git [not_implemented] no brew install metadata for this resource\n" +
+				"2. package:ripgrep [not_implemented] no brew install metadata for this resource\n" +
 				"3. runtime:go [not_implemented] noop installer does not perform real installation\n" +
 				"\n" +
 				"Manual Actions:\n" +
@@ -609,6 +612,7 @@ func TestRunApplyCommand(t *testing.T) {
 			stubInstallationState(t, tt.installationState)
 			stubConfigState(t, tt.configState)
 			stubDotfilesState(t, planning.InstallationState{})
+			stubBrewCommandExists(t, false)
 
 			gotCode := run(tt.args, &stdout, &stderr)
 
@@ -665,7 +669,7 @@ resources = ["tool:fd"]
 				"Manual Actions:",
 				"homebrew:bootstrap: Install Homebrew",
 				"Homebrew is required by selected resources",
-				homebrewInstallCommand,
+				homebrewDocumentationURL,
 			},
 		},
 		{
@@ -687,7 +691,9 @@ resources = ["tool:fd"]
 			wantCode:   exitSuccess,
 			wantContains: []string{
 				"Execution Report",
-				"Mode: confirmed-future-noop",
+				"Mode: confirmed",
+				"Warning: confirmed mode may run real brew install commands",
+				"tool:fd [skipped]",
 				"Manual Actions:",
 				"homebrew:bootstrap: Install Homebrew",
 			},
@@ -743,6 +749,182 @@ resources = ["tool:fd"]
 	}
 }
 
+func TestRunApplySafeModesDoNotInstantiateRealExecution(t *testing.T) {
+	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `
+schema = "dniebles.catalog"
+version = 1
+
+[[tools]]
+id = "fd"
+description = "Fast find alternative"
+[tools.install]
+provider = "brew"
+package = "fd"
+
+[[profiles]]
+id = "dev"
+resources = ["tool:fd"]
+`)
+
+	for _, args := range [][]string{
+		{"apply", "--profile", "dev", "--catalog", catalogPath},
+		{"apply", "--profile", "dev", "--catalog", catalogPath, "--dry-run"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+			stubInstallationState(t, planning.InstallationState{})
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+			stubBrewCommandExists(t, false)
+			stubExecutionFactories(t,
+				func() execution.CommandRunner {
+					t.Fatal("safe modes must not instantiate OS command runners")
+					return nil
+				},
+				func(planning.ResourceKind, execution.CommandRunner, execution.CommandExists) execution.Installer {
+					t.Fatal("safe modes must not instantiate Homebrew installers")
+					return nil
+				},
+			)
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			gotCode := run(args, &stdout, &stderr)
+
+			if gotCode != exitSuccess {
+				t.Fatalf("run() exit code = %d, want %d", gotCode, exitSuccess)
+			}
+			if strings.Contains(stdout.String(), "installed fd") {
+				t.Fatalf("safe mode output reported install: %q", stdout.String())
+			}
+			if stderr.String() != "" {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunApplyConfirmedBrewPresentUsesInjectedRunnerForBrewOnly(t *testing.T) {
+	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `
+schema = "dniebles.catalog"
+version = 1
+
+[[tools]]
+id = "fd"
+description = "Fast find alternative"
+[tools.install]
+provider = "brew"
+package = "fd"
+
+[[packages]]
+id = "ripgrep"
+description = "Fast text search"
+[packages.install]
+provider = "apt"
+package = "ripgrep"
+
+[[runtimes]]
+id = "go"
+description = "Go toolchain"
+[runtimes.install]
+provider = "brew"
+package = "go"
+
+[[profiles]]
+id = "dev"
+resources = ["tool:fd", "package:ripgrep", "runtime:go"]
+`)
+	stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+	stubInstallationState(t, planning.InstallationState{})
+	stubConfigState(t, planning.ConfigState{})
+	stubDotfilesState(t, planning.InstallationState{})
+	stubBrewCommandExists(t, true)
+	runner := &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded, ExitCode: 0}}
+	stubExecutionFactories(t,
+		func() execution.CommandRunner { return runner },
+		func(kind planning.ResourceKind, commandRunner execution.CommandRunner, exists execution.CommandExists) execution.Installer {
+			return execution.NewHomebrewInstaller(kind, commandRunner, exists)
+		},
+	)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	gotCode := run([]string{"apply", "--profile", "dev", "--catalog", catalogPath, "--yes"}, &stdout, &stderr)
+
+	if gotCode != exitSuccess {
+		t.Fatalf("run() exit code = %d, want %d", gotCode, exitSuccess)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("command runner calls = %d, want 1", len(runner.calls))
+	}
+	if got := runner.calls[0]; got.Executable != "brew" || strings.Join(got.Args, " ") != "install fd" {
+		t.Fatalf("CommandRequest = %#v, want brew install fd", got)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"Mode: confirmed",
+		"tool:fd [installed] installed fd with Homebrew",
+		"package:ripgrep [not_implemented] no brew install metadata for this resource",
+		"runtime:go [not_implemented] noop installer does not perform real installation",
+		"Manual Actions:\n- none\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout missing %q; got %q", want, out)
+		}
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunApplyConfirmedMissingBrewDoesNotInstantiateHomebrewInstaller(t *testing.T) {
+	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `
+schema = "dniebles.catalog"
+version = 1
+
+[[packages]]
+id = "ripgrep"
+description = "Fast text search"
+[packages.install]
+provider = "brew"
+package = "ripgrep"
+
+[[profiles]]
+id = "dev"
+resources = ["package:ripgrep"]
+`)
+	stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+	stubInstallationState(t, planning.InstallationState{})
+	stubConfigState(t, planning.ConfigState{})
+	stubDotfilesState(t, planning.InstallationState{})
+	stubBrewCommandExists(t, false)
+	stubExecutionFactories(t,
+		func() execution.CommandRunner {
+			t.Fatal("missing brew must not instantiate OS command runner")
+			return nil
+		},
+		func(planning.ResourceKind, execution.CommandRunner, execution.CommandExists) execution.Installer {
+			t.Fatal("missing brew must not instantiate Homebrew installer")
+			return nil
+		},
+	)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	gotCode := run([]string{"apply", "--profile", "dev", "--catalog", catalogPath, "--yes"}, &stdout, &stderr)
+
+	if gotCode != exitSuccess {
+		t.Fatalf("run() exit code = %d, want %d", gotCode, exitSuccess)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "package:ripgrep [skipped]") || !strings.Contains(out, "homebrew:bootstrap: Install Homebrew") {
+		t.Fatalf("stdout missing skipped install or bootstrap guidance: %q", out)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestRunApplyCatalogLoadErrors(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -795,4 +977,43 @@ func stubDotfilesState(t *testing.T, installation planning.InstallationState) {
 	original := detectDotfilesState
 	detectDotfilesState = func(planning.Catalog) planning.InstallationState { return installation }
 	t.Cleanup(func() { detectDotfilesState = original })
+}
+
+func stubBrewCommandExists(t *testing.T, exists bool) {
+	t.Helper()
+	original := brewCommandExists
+	brewCommandExists = func(name string) bool {
+		if name != "brew" {
+			t.Fatalf("expected lookup for brew, got %q", name)
+		}
+		return exists
+	}
+	t.Cleanup(func() { brewCommandExists = original })
+}
+
+func stubExecutionFactories(
+	t *testing.T,
+	runnerFactory func() execution.CommandRunner,
+	installerFactory func(planning.ResourceKind, execution.CommandRunner, execution.CommandExists) execution.Installer,
+) {
+	t.Helper()
+	originalRunnerFactory := newOSCommandRunner
+	originalInstallerFactory := newHomebrewInstaller
+	newOSCommandRunner = runnerFactory
+	newHomebrewInstaller = installerFactory
+	t.Cleanup(func() {
+		newOSCommandRunner = originalRunnerFactory
+		newHomebrewInstaller = originalInstallerFactory
+	})
+}
+
+type recordingCommandRunner struct {
+	result execution.CommandResult
+	calls  []execution.CommandRequest
+}
+
+func (r *recordingCommandRunner) RunCommand(_ context.Context, req execution.CommandRequest) execution.CommandResult {
+	r.calls = append(r.calls, req)
+	r.result.Request = req
+	return r.result
 }

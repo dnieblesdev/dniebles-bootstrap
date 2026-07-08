@@ -1,11 +1,12 @@
 # Delta for homebrew-bootstrap-provider
 
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Homebrew bootstrap is detected as a provider-owned need
 
 The system MUST detect when a Homebrew-backed resource requires `brew` but Homebrew is missing.
-The detection result MUST be reported as a bootstrap need, not as package installation failure.
+The detection result MUST be reported as a bootstrap need, not as package installation failure, and confirmed `apply --yes` MUST stop before installation and surface the guidance.
+(Previously: missing brew only produced a bootstrap need and no package install was attempted.)
 
 #### Scenario: Missing brew is detected
 
@@ -19,6 +20,20 @@ The detection result MUST be reported as a bootstrap need, not as package instal
 - GIVEN a Homebrew-backed resource is requested
 - WHEN `brew` is available on the host
 - THEN no bootstrap need is reported
+
+#### Scenario: Confirmed apply stops on missing brew
+
+- GIVEN `dbootstrap apply --yes` and a Homebrew-backed step
+- WHEN `brew` is unavailable on the host
+- THEN installation does not proceed
+- AND bootstrap guidance is reported
+
+#### Scenario: Missing brew does not attempt package installation
+
+- GIVEN `dbootstrap apply --yes` and a Homebrew-backed package step
+- WHEN `brew` is unavailable on the host
+- THEN the target package is not installed
+- AND bootstrap guidance is the primary outcome
 
 ### Requirement: Bootstrap reporting provides explicit manual guidance
 

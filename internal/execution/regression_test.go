@@ -53,7 +53,7 @@ func TestNoopExecutionRemainsNonMutating(t *testing.T) {
 	}
 }
 
-func TestApplyRemainsNoopOnlyAndUnwiredFromCommandRunner(t *testing.T) {
+func TestApplyWiresRealExecutionOnlyBehindConfirmedHomebrewPath(t *testing.T) {
 	mainPath := filepath.Join("..", "..", "cmd", "dbootstrap", "main.go")
 	content, err := os.ReadFile(mainPath)
 	if err != nil {
@@ -61,17 +61,16 @@ func TestApplyRemainsNoopOnlyAndUnwiredFromCommandRunner(t *testing.T) {
 	}
 	src := string(content)
 
-	if strings.Contains(src, "CommandRunner") {
-		t.Fatalf("cmd/dbootstrap/main.go references CommandRunner; apply must stay noop-only")
-	}
 	if strings.Contains(src, "RunCommand") {
-		t.Fatalf("cmd/dbootstrap/main.go references RunCommand; apply must stay noop-only")
+		t.Fatalf("cmd/dbootstrap/main.go must not call RunCommand directly; use installer seams")
 	}
-	if strings.Contains(src, "HomebrewInstaller") || strings.Contains(src, "NewHomebrewInstaller") {
-		t.Fatalf("cmd/dbootstrap/main.go references HomebrewInstaller; brew installation must stay unwired")
+	for _, want := range []string{"applyModeConfirmed", "newOSCommandRunner", "newHomebrewInstaller", "BrewOnlyInstaller", "NoopForKind"} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("cmd/dbootstrap/main.go missing %q confirmed-mode safety wiring", want)
+		}
 	}
-	if !strings.Contains(src, "NoopForKind") {
-		t.Fatalf("cmd/dbootstrap/main.go no longer wires NoopForKind installers")
+	if strings.Contains(src, "sh -c") || strings.Contains(src, "curl") {
+		t.Fatalf("cmd/dbootstrap/main.go must not introduce shell/bootstrap command snippets")
 	}
 }
 

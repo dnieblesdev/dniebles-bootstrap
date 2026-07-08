@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
@@ -74,14 +75,33 @@ func TestAppendHomebrewBootstrapBrewMissing(t *testing.T) {
 	}
 	found := false
 	for _, inst := range action.Instructions {
-		if inst == homebrewInstallInstruction {
+		if inst == homebrewDocumentationURL {
 			found = true
-			break
 		}
+		assertNoExecutableHomebrewGuidance(t, inst)
 	}
 	if !found {
-		t.Fatalf("instructions missing official install command: %v", action.Instructions)
+		t.Fatalf("instructions missing official Homebrew documentation URL: %v", action.Instructions)
 	}
+}
+
+func TestAppendHomebrewBootstrapGuidanceIsAdvisoryOnly(t *testing.T) {
+	plan := planning.Plan{Steps: []planning.PlanStep{
+		{Ref: planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "fd"}, Resource: planning.Resource{
+			Install: &planning.InstallMetadata{Provider: "brew", Package: "fd"},
+		}},
+	}}
+
+	got := AppendHomebrewBootstrap(ExecutionReport{}, plan, func(string) bool { return false })
+
+	if len(got.ManualActions) != 1 {
+		t.Fatalf("ManualActions = %d, want 1", len(got.ManualActions))
+	}
+	joined := strings.Join(got.ManualActions[0].Instructions, "\n")
+	if !strings.Contains(joined, homebrewDocumentationURL) {
+		t.Fatalf("instructions missing official documentation URL: %q", joined)
+	}
+	assertNoExecutableHomebrewGuidance(t, joined)
 }
 
 func TestAppendHomebrewBootstrapPreservesResults(t *testing.T) {
@@ -140,5 +160,14 @@ func TestAppendHomebrewBootstrapDoesNotExecuteInstruction(t *testing.T) {
 
 	if len(got.ManualActions) != 1 {
 		t.Fatalf("ManualActions = %d, want 1", len(got.ManualActions))
+	}
+}
+
+func assertNoExecutableHomebrewGuidance(t *testing.T, text string) {
+	t.Helper()
+	for _, forbidden := range []string{"/bin/bash", "curl", "sh -c", "|", "install.sh"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("guidance contains forbidden executable fragment %q in %q", forbidden, text)
+		}
 	}
 }

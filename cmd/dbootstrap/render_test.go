@@ -140,9 +140,9 @@ func TestRenderExecutionReportRendersManualActions(t *testing.T) {
 				Title:  "Install Homebrew",
 				Reason: "Homebrew is required by selected resources but is not installed on this host.",
 				Instructions: []string{
-					"Run the official Homebrew install command manually:",
-					`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`,
-					"After installation, re-run dbootstrap apply to continue.",
+					"Review the official Homebrew installation documentation before making host changes:",
+					"https://brew.sh/",
+					"Install Homebrew manually only after you understand the documented steps, then re-run dbootstrap apply.",
 				},
 			},
 		},
@@ -160,11 +160,20 @@ func TestRenderExecutionReportRendersManualActions(t *testing.T) {
 		"Manual Actions:\n" +
 		"- homebrew:bootstrap: Install Homebrew\n" +
 		"  reason: Homebrew is required by selected resources but is not installed on this host.\n" +
-		"  instruction: Run the official Homebrew install command manually:\n" +
-		"  instruction: /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"\n" +
-		"  instruction: After installation, re-run dbootstrap apply to continue.\n"
+		"  instruction: Review the official Homebrew installation documentation before making host changes:\n" +
+		"  instruction: https://brew.sh/\n" +
+		"  instruction: Install Homebrew manually only after you understand the documented steps, then re-run dbootstrap apply.\n"
 	if got := stdout.String(); got != wantStdout {
 		t.Fatalf("stdout = %q, want %q", got, wantStdout)
+	}
+}
+
+func TestRenderExecutionReportWarnsInConfirmedMode(t *testing.T) {
+	var stdout bytes.Buffer
+	renderExecutionReport(&stdout, applyModeConfirmed, execution.ExecutionReport{})
+
+	if got := stdout.String(); !bytes.Contains([]byte(got), []byte("Warning: confirmed mode may run real brew install commands")) {
+		t.Fatalf("stdout missing confirmed warning: %q", got)
 	}
 }
 
