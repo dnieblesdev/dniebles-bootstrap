@@ -283,7 +283,7 @@ func TestLoadFileAndBuildPlanFromFixture(t *testing.T) {
 				t.Fatalf("tool presence metadata = %#v, want %#v", got, want)
 			}
 		case packageRipgrep:
-			if got, want := step.Resource.Install, (&planning.InstallMetadata{Provider: "apt", Package: "ripgrep"}); !reflect.DeepEqual(got, want) {
+			if got, want := step.Resource.Install, (&planning.InstallMetadata{Provider: "brew", Package: "ripgrep"}); !reflect.DeepEqual(got, want) {
 				t.Fatalf("package install metadata = %#v, want %#v", got, want)
 			}
 			if got, want := step.Resource.Presence, (&planning.PresenceMetadata{Kind: "command_exists", Name: "rg"}); !reflect.DeepEqual(got, want) {

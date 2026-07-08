@@ -31,7 +31,7 @@ id = "ripgrep"
 description = "Fast text search"
 depends_on = ["tool:git"]
 [packages.install]
-provider = "apt"
+provider = "brew"
 package = "ripgrep"
 [packages.presence]
 kind = "command_exists"

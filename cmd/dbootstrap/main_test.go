@@ -12,7 +12,14 @@ import (
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 )
 
-const homebrewDocumentationURL = "https://brew.sh/"
+const (
+	homebrewDocumentationURL   = "https://brew.sh/"
+	homebrewManualActionOutput = "- homebrew:bootstrap: Install Homebrew\n" +
+		"  reason: Homebrew is required by selected resources but is not installed on this host.\n" +
+		"  instruction: Review the official Homebrew installation documentation before making host changes:\n" +
+		"  instruction: https://brew.sh/\n" +
+		"  instruction: Install Homebrew manually only after you understand the documented steps, then re-run dbootstrap apply.\n"
+)
 
 func TestRunPlanCommand(t *testing.T) {
 	tests := []struct {
@@ -509,7 +516,7 @@ func TestRunApplyCommand(t *testing.T) {
 				"3. runtime:go [not_implemented] noop installer does not perform real installation\n" +
 				"\n" +
 				"Manual Actions:\n" +
-				"- none\n",
+				homebrewManualActionOutput,
 			wantStderr: "",
 		},
 		{
@@ -527,7 +534,7 @@ func TestRunApplyCommand(t *testing.T) {
 				"3. runtime:go [not_implemented] noop installer does not perform real installation\n" +
 				"\n" +
 				"Manual Actions:\n" +
-				"- none\n",
+				homebrewManualActionOutput,
 			wantStderr: "",
 		},
 		{
@@ -542,11 +549,11 @@ func TestRunApplyCommand(t *testing.T) {
 				"\n" +
 				"Steps:\n" +
 				"1. tool:git [not_implemented] no brew install metadata for this resource\n" +
-				"2. package:ripgrep [not_implemented] no brew install metadata for this resource\n" +
+				"2. package:ripgrep [skipped] skipped because Homebrew must be installed manually before brew-backed resources can be applied\n" +
 				"3. runtime:go [not_implemented] noop installer does not perform real installation\n" +
 				"\n" +
 				"Manual Actions:\n" +
-				"- none\n",
+				homebrewManualActionOutput,
 			wantStderr: "",
 		},
 		{
