@@ -67,6 +67,9 @@ func TestApplyRemainsNoopOnlyAndUnwiredFromCommandRunner(t *testing.T) {
 	if strings.Contains(src, "RunCommand") {
 		t.Fatalf("cmd/dbootstrap/main.go references RunCommand; apply must stay noop-only")
 	}
+	if strings.Contains(src, "HomebrewInstaller") || strings.Contains(src, "NewHomebrewInstaller") {
+		t.Fatalf("cmd/dbootstrap/main.go references HomebrewInstaller; brew installation must stay unwired")
+	}
 	if !strings.Contains(src, "NoopForKind") {
 		t.Fatalf("cmd/dbootstrap/main.go no longer wires NoopForKind installers")
 	}
