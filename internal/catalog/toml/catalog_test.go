@@ -257,6 +257,49 @@ func TestLoadFileAndBuildPlanFromFixture(t *testing.T) {
 		t.Fatalf("LoadFile() error = %v", err)
 	}
 
+	wantCatalog := planning.Catalog{
+		Profiles: map[string]planning.Profile{
+			"dev": {Name: "dev", Bundles: []string{"cli"}, Resources: []planning.ResourceRef{runtimeGo}},
+		},
+		Bundles: map[string]planning.Bundle{
+			"cli": {Name: "cli", Resources: []planning.ResourceRef{toolGit, packageRipgrep}},
+		},
+		Resources: map[planning.ResourceRef]planning.Resource{
+			toolGit: {
+				Ref:         toolGit,
+				Description: "Version control",
+				DependsOn:   []planning.ResourceRef{},
+				Install:     &planning.InstallMetadata{Provider: "brew", Package: "git"},
+				Presence:    &planning.PresenceMetadata{Kind: "command_exists", Name: "git"},
+				Conditions:  planning.EnvironmentConditions{OS: []string{"linux", "darwin"}},
+			},
+			runtimeGo: {
+				Ref:          runtimeGo,
+				Description:  "Go toolchain",
+				DependsOn:    []planning.ResourceRef{toolGit},
+				ConfigPolicy: planning.ConfigPolicy{RequiredKeys: []string{"go.env"}},
+				Install:      &planning.InstallMetadata{Provider: "asdf", Package: "golang"},
+				Presence:     &planning.PresenceMetadata{Kind: "command_exists", Name: "go"},
+				Conditions:   planning.EnvironmentConditions{OS: []string{"linux", "darwin"}, Arch: []string{"amd64", "arm64"}},
+			},
+			packageRipgrep: {
+				Ref:         packageRipgrep,
+				Description: "Fast text search",
+				DependsOn:   []planning.ResourceRef{toolGit},
+				Install:     &planning.InstallMetadata{Provider: "brew", Package: "ripgrep"},
+				Presence:    &planning.PresenceMetadata{Kind: "command_exists", Name: "rg"},
+			},
+			dotBash: {
+				Ref:         dotBash,
+				Description: "Bash dotfiles",
+				DependsOn:   []planning.ResourceRef{},
+			},
+		},
+	}
+	if !reflect.DeepEqual(catalog, wantCatalog) {
+		t.Fatalf("default catalog = %#v, want %#v", catalog, wantCatalog)
+	}
+
 	result := planning.BuildPlan(
 		catalog,
 		planning.PlanRequest{Profile: "dev"},
@@ -276,7 +319,7 @@ func TestLoadFileAndBuildPlanFromFixture(t *testing.T) {
 	for _, step := range result.Plan.Steps {
 		switch step.Ref {
 		case toolGit:
-			if got, want := step.Resource.Install, (&planning.InstallMetadata{Provider: "apt", Package: "git"}); !reflect.DeepEqual(got, want) {
+			if got, want := step.Resource.Install, (&planning.InstallMetadata{Provider: "brew", Package: "git"}); !reflect.DeepEqual(got, want) {
 				t.Fatalf("tool install metadata = %#v, want %#v", got, want)
 			}
 			if got, want := step.Resource.Presence, (&planning.PresenceMetadata{Kind: "command_exists", Name: "git"}); !reflect.DeepEqual(got, want) {

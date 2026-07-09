@@ -6,7 +6,7 @@ id = "git"
 description = "Version control"
 os = ["linux", "darwin"]
 [tools.install]
-provider = "apt"
+provider = "brew"
 package = "git"
 [tools.presence]
 kind = "command_exists"

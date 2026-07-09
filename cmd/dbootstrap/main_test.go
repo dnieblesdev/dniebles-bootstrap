@@ -561,12 +561,12 @@ func TestRunApplyCommand(t *testing.T) {
 				"\n" +
 				"Summary:\n" +
 				"- changed: 0\n" +
-				"- unchanged: 1\n" +
-				"- not supported yet: 2\n" +
+				"- unchanged: 2\n" +
+				"- not supported yet: 1\n" +
 				"- failed: 0\n" +
 				"\n" +
 				"Steps:\n" +
-				"1. tool:git [not supported yet] no brew install metadata for this resource\n" +
+				"1. tool:git [unchanged] skipped because Homebrew must be installed manually before brew-backed resources can be applied\n" +
 				"2. package:ripgrep [unchanged] skipped because Homebrew must be installed manually before brew-backed resources can be applied\n" +
 				"3. runtime:go [not supported yet] noop installer does not perform real installation\n" +
 				"\n" +
@@ -593,7 +593,7 @@ func TestRunApplyCommand(t *testing.T) {
 				"1. tool:git [not supported yet] noop installer does not perform real installation\n" +
 				"\n" +
 				"Manual Actions:\n" +
-				"- none\n",
+				homebrewManualActionOutput,
 			wantStderr: "",
 		},
 		{
