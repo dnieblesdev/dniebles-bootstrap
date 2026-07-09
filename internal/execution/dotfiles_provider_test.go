@@ -1,0 +1,202 @@
+package execution
+
+import (
+	"context"
+	"errors"
+	"os"
+	"reflect"
+	"testing"
+)
+
+func TestLocalDotfilesProviderBuildsExactCommand(t *testing.T) {
+	runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusSucceeded}}
+	provider := newFakeLocalProvider("/repo", runner)
+
+	err := provider.RunDotlink(context.Background(), []string{"bash", "nvim"})
+	if err != nil {
+		t.Fatalf("RunDotlink() error = %v", err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("runner calls = %d, want 1", len(runner.calls))
+	}
+	want := CommandRequest{Executable: "/repo/bin/dotlink", Args: []string{"link", "bash", "nvim"}, Dir: "/repo", Timeout: DefaultDotlinkTimeout}
+	if !reflect.DeepEqual(runner.calls[0], want) {
+		t.Fatalf("CommandRequest = %#v, want %#v", runner.calls[0], want)
+	}
+}
+
+func TestLocalDotfilesProviderValidationFailuresDoNotRun(t *testing.T) {
+	tests := []struct {
+		name    string
+		modules []string
+		setup   func(*LocalDotfilesProvider)
+	}{
+		{name: "empty modules", modules: nil},
+		{name: "missing dotlink", modules: []string{"bash"}, setup: func(p *LocalDotfilesProvider) { p.Stat = statDirs("/repo", "/repo/bash") }},
+		{name: "dotlink escapes", modules: []string{"bash"}, setup: func(p *LocalDotfilesProvider) {
+			p.EvalSymlinks = fakeEval(map[string]string{"/repo/bin/dotlink": "/tmp/dotlink", "/repo/bash": "/repo/bash"})
+		}},
+		{name: "missing module", modules: []string{"missing"}},
+		{name: "module escapes", modules: []string{"bash"}, setup: func(p *LocalDotfilesProvider) {
+			p.EvalSymlinks = fakeEval(map[string]string{"/repo/bin/dotlink": "/repo/bin/dotlink", "/repo/bash": "/tmp/bash"})
+		}},
+		{name: "missing runner", modules: []string{"bash"}, setup: func(p *LocalDotfilesProvider) { p.Runner = nil }},
+		{name: "leading dash", modules: []string{"-bad"}},
+		{name: "separator", modules: []string{"bad/name"}},
+		{name: "absolute", modules: []string{"/bad"}},
+		{name: "dot", modules: []string{"."}},
+		{name: "dotdot", modules: []string{".."}},
+		{name: "bad character", modules: []string{"bad name"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusSucceeded}}
+			provider := newFakeLocalProvider("/repo", runner)
+			if tt.setup != nil {
+				tt.setup(provider)
+			}
+
+			if err := provider.RunDotlink(context.Background(), tt.modules); err == nil {
+				t.Fatal("RunDotlink() error = nil, want failure")
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runner calls = %d, want 0", len(runner.calls))
+			}
+		})
+	}
+}
+
+func TestLocalDotfilesProviderCommandFailureAndTimeout(t *testing.T) {
+	tests := []struct {
+		name   string
+		result CommandResult
+	}{
+		{name: "failed", result: CommandResult{Status: CommandStatusFailed, Err: errors.New("exit 1")}},
+		{name: "timed out", result: CommandResult{Status: CommandStatusTimedOut, Err: context.DeadlineExceeded}},
+		{name: "not run", result: CommandResult{Status: CommandStatusNotRun}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeCommandRunner{result: tt.result}
+			provider := newFakeLocalProvider("/repo", runner)
+
+			if err := provider.RunDotlink(context.Background(), []string{"bash"}); err == nil {
+				t.Fatal("RunDotlink() error = nil, want failure")
+			}
+			if len(runner.calls) != 1 {
+				t.Fatalf("runner calls = %d, want 1", len(runner.calls))
+			}
+		})
+	}
+}
+
+func TestLocalDotfilesProviderEnsureModulesValidatesWithoutRunning(t *testing.T) {
+	runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusSucceeded}}
+	provider := newFakeLocalProvider("/repo", runner)
+
+	if err := provider.EnsureModules(context.Background(), []string{"bash"}); err != nil {
+		t.Fatalf("EnsureModules() error = %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %d, want 0", len(runner.calls))
+	}
+}
+
+func TestLocalDotfilesProviderUsesCanonicalInjectedBaseForCommand(t *testing.T) {
+	runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusSucceeded}}
+	provider := &LocalDotfilesProvider{
+		Base:     ResolvedDotfilesBase{CanonicalPath: "/repo-link"},
+		Resolver: DotfilesBaseResolver{HomeDir: func() (string, error) { return "/home/ada", nil }},
+		Runner:   runner,
+		Stat:     statDirs("/repo", "/repo/bin/dotlink", "/repo/bash"),
+		EvalSymlinks: fakeEval(map[string]string{
+			"/home/ada":         "/home/ada",
+			"/repo-link":        "/repo",
+			"/repo/bin/dotlink": "/repo/bin/dotlink",
+			"/repo/bash":        "/repo/bash",
+		}),
+	}
+
+	if err := provider.RunDotlink(context.Background(), []string{"bash"}); err != nil {
+		t.Fatalf("RunDotlink() error = %v", err)
+	}
+	want := CommandRequest{Executable: "/repo/bin/dotlink", Args: []string{"link", "bash"}, Dir: "/repo", Timeout: DefaultDotlinkTimeout}
+	if !reflect.DeepEqual(runner.calls, []CommandRequest{want}) {
+		t.Fatalf("runner calls = %#v, want %#v", runner.calls, []CommandRequest{want})
+	}
+}
+
+func TestLocalDotfilesProviderRejectsUnsafeInjectedBase(t *testing.T) {
+	tests := []struct {
+		name string
+		base string
+		stat func(string) (os.FileInfo, error)
+	}{
+		{name: "root", base: "/", stat: statDirs("/")},
+		{name: "home", base: "/home/ada", stat: statDirs("/home/ada")},
+		{name: "alias to home", base: "/home-link/ada", stat: statDirs("/home/ada")},
+		{name: "relative", base: "relative", stat: statDirs("relative")},
+		{name: "missing", base: "/missing", stat: func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }},
+		{name: "non-directory", base: "/file", stat: func(string) (os.FileInfo, error) { return fakeFileInfo{dir: false}, nil }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusSucceeded}}
+			provider := &LocalDotfilesProvider{
+				Base:     ResolvedDotfilesBase{CanonicalPath: tt.base},
+				Resolver: DotfilesBaseResolver{HomeDir: func() (string, error) { return "/home/ada", nil }},
+				Runner:   runner,
+				Stat:     tt.stat,
+				EvalSymlinks: func(path string) (string, error) {
+					if path == "/home/ada" {
+						return "/home/ada", nil
+					}
+					if tt.name == "alias to home" && path == "/home-link/ada" {
+						return "/home/ada", nil
+					}
+					if path == tt.base {
+						return tt.base, nil
+					}
+					return "", os.ErrNotExist
+				},
+			}
+
+			if err := provider.RunDotlink(context.Background(), []string{"bash"}); err == nil {
+				t.Fatal("RunDotlink() error = nil, want unsafe base failure")
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runner calls = %d, want 0", len(runner.calls))
+			}
+		})
+	}
+}
+
+func newFakeLocalProvider(base string, runner CommandRunner) *LocalDotfilesProvider {
+	home := "/home/ada"
+	return &LocalDotfilesProvider{
+		Base:     ResolvedDotfilesBase{CanonicalPath: base},
+		Resolver: DotfilesBaseResolver{HomeDir: func() (string, error) { return home, nil }},
+		Runner:   runner,
+		Stat:     statDirs(base, base+"/bin/dotlink", base+"/bash", base+"/nvim"),
+		EvalSymlinks: fakeEval(map[string]string{
+			home:                  home,
+			base:                  base,
+			base + "/bin/dotlink": base + "/bin/dotlink",
+			base + "/bash":        base + "/bash",
+			base + "/nvim":        base + "/nvim",
+		}),
+		Timeout: DefaultDotlinkTimeout,
+	}
+}
+
+func fakeEval(paths map[string]string) func(string) (string, error) {
+	return func(path string) (string, error) {
+		if got, ok := paths[path]; ok {
+			return got, nil
+		}
+		return "", os.ErrNotExist
+	}
+}
