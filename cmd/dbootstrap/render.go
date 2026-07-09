@@ -55,24 +55,72 @@ func renderExecutionReport(w io.Writer, mode applyMode, report execution.Executi
 	fmt.Fprintln(w, "Execution Report")
 	fmt.Fprintf(w, "Mode: %s\n", mode)
 	if mode == applyModeConfirmed {
-		fmt.Fprintln(w, "Warning: confirmed mode may run real brew install commands for brew-backed tool/package resources.")
+		fmt.Fprintln(w, "Confirmed mode: only brew-backed tool/package steps may have changed this machine; runtime, dotfile, non-brew, and unsupported steps remain non-mutating or not supported yet.")
 	}
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Steps:")
+
 	if len(report.Results) == 0 {
-		fmt.Fprintln(w, "- none")
-	} else {
-		for index, result := range report.Results {
-			fmt.Fprintf(w, "%d. %s [%s]", index+1, renderRef(result.Ref), result.Status)
-			if result.Message != "" {
-				fmt.Fprintf(w, " %s", result.Message)
-			}
-			fmt.Fprintln(w)
+		fmt.Fprintln(w, "No actionable steps were selected; nothing to apply.")
+		fmt.Fprintln(w)
+		renderManualActions(w, report)
+		return
+	}
+
+	renderExecutionSummary(w, report.Results)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Steps:")
+	for index, result := range report.Results {
+		fmt.Fprintf(w, "%d. %s [%s]", index+1, renderRef(result.Ref), renderExecutionStepStatus(result.Status))
+		if result.Message != "" {
+			fmt.Fprintf(w, " %s", result.Message)
 		}
+		fmt.Fprintln(w)
 	}
 
 	fmt.Fprintln(w)
 	renderManualActions(w, report)
+}
+
+func renderExecutionSummary(w io.Writer, results []execution.StepResult) {
+	counts := executionSummaryCounts(results)
+	fmt.Fprintln(w, "Summary:")
+	for _, category := range executionSummaryCategories() {
+		fmt.Fprintf(w, "- %s: %d\n", category, counts[category])
+	}
+}
+
+func executionSummaryCounts(results []execution.StepResult) map[string]int {
+	counts := make(map[string]int, len(executionSummaryCategories()))
+	for _, category := range executionSummaryCategories() {
+		counts[category] = 0
+	}
+	for _, result := range results {
+		counts[executionSummaryCategory(result.Status)]++
+	}
+	return counts
+}
+
+func executionSummaryCategories() []string {
+	return []string{"changed", "unchanged", "not supported yet", "failed"}
+}
+
+func executionSummaryCategory(status execution.StepStatus) string {
+	switch status {
+	case execution.StepStatusInstalled:
+		return "changed"
+	case execution.StepStatusSkipped:
+		return "unchanged"
+	case execution.StepStatusNotImplemented:
+		return "not supported yet"
+	case execution.StepStatusFailed:
+		return "failed"
+	default:
+		return "failed"
+	}
+}
+
+func renderExecutionStepStatus(status execution.StepStatus) string {
+	return executionSummaryCategory(status)
 }
 
 func renderManualActions(w io.Writer, report execution.ExecutionReport) {

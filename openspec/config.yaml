@@ -1,0 +1,47 @@
+project:
+  name: dniebles-bootstrap
+  root: .
+  summary: Domain-first Go bootstrap orchestrator for planning and running profile and point installs while keeping dotfiles ownership external.
+
+artifact_store:
+  mode: both
+  open_spec_root: openspec
+  engram_topic_key_prefix: sdd-init/dniebles-bootstrap
+
+strict_tdd: true
+
+testing:
+  runner: go test ./...
+  coverage: go test -cover ./...
+  vet: go vet ./...
+  format: gofmt -w .
+  notes:
+    - Keep the full Go suite green.
+    - Run focused package tests first when the diff is small.
+    - Warn when a diff becomes review-heavy.
+
+phase_rules:
+  explore:
+    - Inspect repository stack, conventions, docs, and test tooling before proposing work.
+    - Record findings in English and avoid implementation changes.
+  propose:
+    - Keep scope minimal and aligned to existing active specs or clearly new capabilities.
+    - Reuse archived context and current repo behavior.
+  spec:
+    - Write user-visible behavior and acceptance criteria only.
+    - Keep implementation detail out of spec text.
+  design:
+    - Preserve domain-first boundaries and external dotfiles ownership.
+    - Prefer pure core with thin adapter layers.
+  tasks:
+    - Split work into reviewable tasks.
+    - Default to a single PR unless a size exception is explicitly justified.
+  apply:
+    - Do not expand scope beyond the approved slice.
+    - Avoid product code changes outside the requested slice.
+  verify:
+    - Run focused tests first, then full go test ./... when reasonable.
+    - Capture command output and note review-heavy diffs.
+  archive:
+    - Move completed change artifacts to archive.
+    - Keep active specs synchronized when required.

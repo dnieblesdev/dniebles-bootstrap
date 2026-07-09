@@ -104,11 +104,13 @@ func TestRenderPlanResultResourceOnlyHeader(t *testing.T) {
 	}
 }
 
-func TestRenderExecutionReportIsDistinctFromPlanRendering(t *testing.T) {
+func TestRenderExecutionReportRendersSummaryAndUserFacingStatuses(t *testing.T) {
 	report := execution.ExecutionReport{
 		Results: []execution.StepResult{
-			{Ref: planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "git"}, Status: execution.StepStatusNotImplemented, Message: "noop installer does not perform real installation"},
-			{Ref: planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "ripgrep"}, Status: execution.StepStatusNotImplemented, Message: "noop installer does not perform real installation"},
+			{Ref: planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "fd"}, Status: execution.StepStatusInstalled, Message: "installed fd with Homebrew"},
+			{Ref: planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "ripgrep"}, Status: execution.StepStatusSkipped, Message: "skipped because Homebrew must be installed manually"},
+			{Ref: planning.ResourceRef{Kind: planning.ResourceKindRuntime, Name: "go"}, Status: execution.StepStatusNotImplemented, Message: "noop installer does not perform real installation"},
+			{Ref: planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "broken"}, Status: execution.StepStatusFailed, Message: "brew install broken failed"},
 		},
 	}
 
@@ -118,9 +120,17 @@ func TestRenderExecutionReportIsDistinctFromPlanRendering(t *testing.T) {
 	wantStdout := "Execution Report\n" +
 		"Mode: dry-run\n" +
 		"\n" +
+		"Summary:\n" +
+		"- changed: 1\n" +
+		"- unchanged: 1\n" +
+		"- not supported yet: 1\n" +
+		"- failed: 1\n" +
+		"\n" +
 		"Steps:\n" +
-		"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
-		"2. package:ripgrep [not_implemented] noop installer does not perform real installation\n" +
+		"1. tool:fd [changed] installed fd with Homebrew\n" +
+		"2. package:ripgrep [unchanged] skipped because Homebrew must be installed manually\n" +
+		"3. runtime:go [not supported yet] noop installer does not perform real installation\n" +
+		"4. tool:broken [failed] brew install broken failed\n" +
 		"\n" +
 		"Manual Actions:\n" +
 		"- none\n"
@@ -154,8 +164,14 @@ func TestRenderExecutionReportRendersManualActions(t *testing.T) {
 	wantStdout := "Execution Report\n" +
 		"Mode: dry-run\n" +
 		"\n" +
+		"Summary:\n" +
+		"- changed: 0\n" +
+		"- unchanged: 0\n" +
+		"- not supported yet: 1\n" +
+		"- failed: 0\n" +
+		"\n" +
 		"Steps:\n" +
-		"1. tool:fd [not_implemented] noop installer does not perform real installation\n" +
+		"1. tool:fd [not supported yet] noop installer does not perform real installation\n" +
 		"\n" +
 		"Manual Actions:\n" +
 		"- homebrew:bootstrap: Install Homebrew\n" +
@@ -168,12 +184,18 @@ func TestRenderExecutionReportRendersManualActions(t *testing.T) {
 	}
 }
 
-func TestRenderExecutionReportWarnsInConfirmedMode(t *testing.T) {
+func TestRenderExecutionReportFramesConfirmedModeMutability(t *testing.T) {
 	var stdout bytes.Buffer
 	renderExecutionReport(&stdout, applyModeConfirmed, execution.ExecutionReport{})
 
-	if got := stdout.String(); !bytes.Contains([]byte(got), []byte("Warning: confirmed mode may run real brew install commands")) {
-		t.Fatalf("stdout missing confirmed warning: %q", got)
+	got := stdout.String()
+	for _, want := range []string{
+		"Confirmed mode: only brew-backed tool/package steps may have changed this machine",
+		"unsupported steps remain non-mutating or not supported yet",
+	} {
+		if !bytes.Contains([]byte(got), []byte(want)) {
+			t.Fatalf("stdout missing %q: %q", want, got)
+		}
 	}
 }
 
@@ -184,8 +206,7 @@ func TestRenderExecutionReportHandlesEmptyReport(t *testing.T) {
 	wantStdout := "Execution Report\n" +
 		"Mode: default-non-mutating\n" +
 		"\n" +
-		"Steps:\n" +
-		"- none\n" +
+		"No actionable steps were selected; nothing to apply.\n" +
 		"\n" +
 		"Manual Actions:\n" +
 		"- none\n"

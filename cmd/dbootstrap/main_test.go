@@ -510,10 +510,16 @@ func TestRunApplyCommand(t *testing.T) {
 			wantStdout: "Execution Report\n" +
 				"Mode: default-non-mutating\n" +
 				"\n" +
+				"Summary:\n" +
+				"- changed: 0\n" +
+				"- unchanged: 0\n" +
+				"- not supported yet: 3\n" +
+				"- failed: 0\n" +
+				"\n" +
 				"Steps:\n" +
-				"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
-				"2. package:ripgrep [not_implemented] noop installer does not perform real installation\n" +
-				"3. runtime:go [not_implemented] noop installer does not perform real installation\n" +
+				"1. tool:git [not supported yet] noop installer does not perform real installation\n" +
+				"2. package:ripgrep [not supported yet] noop installer does not perform real installation\n" +
+				"3. runtime:go [not supported yet] noop installer does not perform real installation\n" +
 				"\n" +
 				"Manual Actions:\n" +
 				homebrewManualActionOutput,
@@ -528,10 +534,16 @@ func TestRunApplyCommand(t *testing.T) {
 			wantStdout: "Execution Report\n" +
 				"Mode: dry-run\n" +
 				"\n" +
+				"Summary:\n" +
+				"- changed: 0\n" +
+				"- unchanged: 0\n" +
+				"- not supported yet: 3\n" +
+				"- failed: 0\n" +
+				"\n" +
 				"Steps:\n" +
-				"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
-				"2. package:ripgrep [not_implemented] noop installer does not perform real installation\n" +
-				"3. runtime:go [not_implemented] noop installer does not perform real installation\n" +
+				"1. tool:git [not supported yet] noop installer does not perform real installation\n" +
+				"2. package:ripgrep [not supported yet] noop installer does not perform real installation\n" +
+				"3. runtime:go [not supported yet] noop installer does not perform real installation\n" +
 				"\n" +
 				"Manual Actions:\n" +
 				homebrewManualActionOutput,
@@ -545,12 +557,18 @@ func TestRunApplyCommand(t *testing.T) {
 			wantCode:          exitSuccess,
 			wantStdout: "Execution Report\n" +
 				"Mode: confirmed\n" +
-				"Warning: confirmed mode may run real brew install commands for brew-backed tool/package resources.\n" +
+				"Confirmed mode: only brew-backed tool/package steps may have changed this machine; runtime, dotfile, non-brew, and unsupported steps remain non-mutating or not supported yet.\n" +
+				"\n" +
+				"Summary:\n" +
+				"- changed: 0\n" +
+				"- unchanged: 1\n" +
+				"- not supported yet: 2\n" +
+				"- failed: 0\n" +
 				"\n" +
 				"Steps:\n" +
-				"1. tool:git [not_implemented] no brew install metadata for this resource\n" +
-				"2. package:ripgrep [skipped] skipped because Homebrew must be installed manually before brew-backed resources can be applied\n" +
-				"3. runtime:go [not_implemented] noop installer does not perform real installation\n" +
+				"1. tool:git [not supported yet] no brew install metadata for this resource\n" +
+				"2. package:ripgrep [unchanged] skipped because Homebrew must be installed manually before brew-backed resources can be applied\n" +
+				"3. runtime:go [not supported yet] noop installer does not perform real installation\n" +
 				"\n" +
 				"Manual Actions:\n" +
 				homebrewManualActionOutput,
@@ -565,8 +583,14 @@ func TestRunApplyCommand(t *testing.T) {
 			wantStdout: "Execution Report\n" +
 				"Mode: default-non-mutating\n" +
 				"\n" +
+				"Summary:\n" +
+				"- changed: 0\n" +
+				"- unchanged: 0\n" +
+				"- not supported yet: 1\n" +
+				"- failed: 0\n" +
+				"\n" +
 				"Steps:\n" +
-				"1. tool:git [not_implemented] noop installer does not perform real installation\n" +
+				"1. tool:git [not supported yet] noop installer does not perform real installation\n" +
 				"\n" +
 				"Manual Actions:\n" +
 				"- none\n",
@@ -672,7 +696,7 @@ resources = ["tool:fd"]
 			wantContains: []string{
 				"Execution Report",
 				"Mode: default-non-mutating",
-				"tool:fd [not_implemented]",
+				"tool:fd [not supported yet]",
 				"Manual Actions:",
 				"homebrew:bootstrap: Install Homebrew",
 				"Homebrew is required by selected resources",
@@ -699,8 +723,8 @@ resources = ["tool:fd"]
 			wantContains: []string{
 				"Execution Report",
 				"Mode: confirmed",
-				"Warning: confirmed mode may run real brew install commands",
-				"tool:fd [skipped]",
+				"Confirmed mode: only brew-backed tool/package steps may have changed this machine",
+				"tool:fd [unchanged]",
 				"Manual Actions:",
 				"homebrew:bootstrap: Install Homebrew",
 			},
@@ -870,9 +894,9 @@ resources = ["tool:fd", "package:ripgrep", "runtime:go"]
 	out := stdout.String()
 	for _, want := range []string{
 		"Mode: confirmed",
-		"tool:fd [installed] installed fd with Homebrew",
-		"package:ripgrep [not_implemented] no brew install metadata for this resource",
-		"runtime:go [not_implemented] noop installer does not perform real installation",
+		"tool:fd [changed] installed fd with Homebrew",
+		"package:ripgrep [not supported yet] no brew install metadata for this resource",
+		"runtime:go [not supported yet] noop installer does not perform real installation",
 		"Manual Actions:\n- none\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -924,7 +948,7 @@ resources = ["package:ripgrep"]
 		t.Fatalf("run() exit code = %d, want %d", gotCode, exitSuccess)
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "package:ripgrep [skipped]") || !strings.Contains(out, "homebrew:bootstrap: Install Homebrew") {
+	if !strings.Contains(out, "package:ripgrep [unchanged]") || !strings.Contains(out, "homebrew:bootstrap: Install Homebrew") {
 		t.Fatalf("stdout missing skipped install or bootstrap guidance: %q", out)
 	}
 	if stderr.String() != "" {
