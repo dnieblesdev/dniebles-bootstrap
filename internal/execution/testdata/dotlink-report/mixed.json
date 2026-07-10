@@ -1,0 +1,1 @@
+{"schema_version":1,"modules":["bash"],"status":"success","entries":[{"module":"bash","source":"bashrc","target":"/home/ada/.bashrc","outcome":"changed"},{"module":"bash","source":"profile","target":"/home/ada/.profile","outcome":"unchanged"}],"failure":null,"rollback":{"attempted":false,"completed":false,"removed":[]}}

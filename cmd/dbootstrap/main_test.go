@@ -933,7 +933,7 @@ func TestRunApplyConfirmedDotfilesUsesInjectedRunner(t *testing.T) {
 	stubConfigState(t, planning.ConfigState{})
 	stubDotfilesState(t, planning.InstallationState{})
 	stubBrewCommandExists(t, true)
-	runner := &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded, ExitCode: 0}}
+	runner := &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded, ExitCode: 0, Stdout: `{"schema_version":1,"modules":["bash"],"status":"success","entries":[{"module":"bash","source":"bashrc","target":"/home/ada/.bashrc","outcome":"changed"}],"failure":null,"rollback":{"attempted":false,"completed":false,"removed":[]}}`}}
 	stubExecutionFactories(t,
 		func() execution.CommandRunner { return runner },
 		func(kind planning.ResourceKind, commandRunner execution.CommandRunner, exists execution.CommandExists) execution.Installer {
@@ -959,7 +959,7 @@ func TestRunApplyConfirmedDotfilesUsesInjectedRunner(t *testing.T) {
 		t.Fatalf("command runner calls = %d, want 1", len(runner.calls))
 	}
 	call := runner.calls[0]
-	if call.Executable != filepath.Join(base, "bin", "dotlink") || strings.Join(call.Args, " ") != "link bash" || call.Dir != base {
+	if call.Executable != filepath.Join(base, "bin", "dotlink") || strings.Join(call.Args, " ") != "link --report=json bash" || call.Dir != base {
 		t.Fatalf("CommandRequest = %#v, want dotlink for bash only", call)
 	}
 	out := stdout.String()

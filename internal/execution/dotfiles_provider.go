@@ -14,11 +14,13 @@ import (
 const DefaultDotlinkTimeout = 2 * time.Minute
 
 var (
-	ErrEmptyDotfileModules  = errors.New("dotfile module list is empty")
-	ErrInvalidDotfileModule = errors.New("invalid dotfile module name")
-	ErrMissingDotlinkRunner = errors.New("missing dotfiles command runner")
-	ErrDotfilesPathEscapes  = errors.New("dotfiles path escapes base")
-	ErrDotlinkCommandFailed = errors.New("dotlink command failed")
+	ErrEmptyDotfileModules       = errors.New("dotfile module list is empty")
+	ErrInvalidDotfileModule      = errors.New("invalid dotfile module name")
+	ErrMissingDotlinkRunner      = errors.New("missing dotfiles command runner")
+	ErrDotfilesPathEscapes       = errors.New("dotfiles path escapes base")
+	ErrDotlinkCommandFailed      = errors.New("dotlink command failed")
+	ErrInconsistentDotlinkReport = errors.New("inconsistent dotlink command and report status")
+	ErrDotlinkReportUnavailable  = errors.New("dotlink report unavailable")
 )
 
 var dotfileModuleNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -48,36 +50,66 @@ func (p *LocalDotfilesProvider) EnsureModules(_ context.Context, modules []strin
 	return p.validateRepo(base.CanonicalPath, modules)
 }
 
+// RunDotlink preserves the legacy provider seam while consuming the report.
+// Callers that need validated report data use RunDotlinkReport.
 func (p *LocalDotfilesProvider) RunDotlink(ctx context.Context, modules []string) error {
-	base, err := p.resolvedBase()
+	report, err := p.RunDotlinkReport(ctx, modules)
 	if err != nil {
 		return err
 	}
+	if report.Status == DotlinkReportStatusFailed {
+		return ErrDotlinkCommandFailed
+	}
+	return nil
+}
+
+// RunDotlinkReport executes dotlink once and returns only a validated report.
+// Stderr is deliberately never inspected.
+func (p *LocalDotfilesProvider) RunDotlinkReport(ctx context.Context, modules []string) (DotlinkLinkReport, error) {
+	base, err := p.resolvedBase()
+	if err != nil {
+		return DotlinkLinkReport{}, err
+	}
 	if err := p.validateRepo(base.CanonicalPath, modules); err != nil {
-		return err
+		return DotlinkLinkReport{}, err
 	}
 	if p.Runner == nil {
-		return ErrMissingDotlinkRunner
+		return DotlinkLinkReport{}, ErrMissingDotlinkRunner
 	}
 
 	timeout := p.Timeout
 	if timeout <= 0 {
 		timeout = DefaultDotlinkTimeout
 	}
-	args := make([]string, 0, len(modules)+1)
-	args = append(args, "link")
+	args := make([]string, 0, len(modules)+2)
+	args = append(args, "link", "--report=json")
 	args = append(args, modules...)
-	request := CommandRequest{
+	result := p.Runner.RunCommand(ctx, CommandRequest{
 		Executable: filepath.Join(base.CanonicalPath, "bin", "dotlink"),
 		Args:       args,
 		Dir:        base.CanonicalPath,
 		Timeout:    timeout,
+	})
+
+	if strings.TrimSpace(result.Stdout) == "" {
+		if result.Status == CommandStatusSucceeded {
+			return DotlinkLinkReport{}, ErrDotlinkReportUnavailable
+		}
+		return DotlinkLinkReport{}, ErrDotlinkCommandFailed
 	}
-	result := p.Runner.RunCommand(ctx, request)
-	if result.Status == CommandStatusSucceeded {
-		return nil
+	report, parseErr := ParseDotlinkLinkReport([]byte(result.Stdout), modules)
+	if parseErr != nil {
+		if result.Status == CommandStatusSucceeded {
+			return DotlinkLinkReport{}, parseErr
+		}
+		return DotlinkLinkReport{}, ErrDotlinkCommandFailed
 	}
-	return fmt.Errorf("%w: %s: %w", ErrDotlinkCommandFailed, result.Status, commandResultError(result))
+	report.CommandStatus = result.Status
+	if (report.Status == DotlinkReportStatusSuccess && result.Status != CommandStatusSucceeded) ||
+		(report.Status == DotlinkReportStatusFailed && result.Status != CommandStatusFailed) {
+		return DotlinkLinkReport{}, ErrInconsistentDotlinkReport
+	}
+	return report, nil
 }
 
 func (p *LocalDotfilesProvider) resolvedBase() (ResolvedDotfilesBase, error) {

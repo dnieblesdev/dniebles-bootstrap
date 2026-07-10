@@ -1,0 +1,1 @@
+{"schema_version":1,"modules":["bash"],"status":"failed","entries":[{"module":"bash","source":"a","target":"b","outcome":"failed","cause":{"code":"x","code":"y","message":"bad"}}],"failure":{"module":"bash","cause":{"code":"x","message":"bad"}},"rollback":{"attempted":false,"completed":false,"removed":[]}}

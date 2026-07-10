@@ -1,0 +1,1 @@
+{"schema_version":1,"modules":["bash"],"status":"failed","entries":[{"module":"bash","source":"bashrc","target":"/home/ada/.bashrc","outcome":"rolled_back","cause":{"code":"rollback","message":"link reverted"}}],"failure":{"module":"bash","cause":{"code":"link_failed","message":"target exists"}},"rollback":{"attempted":true,"completed":true,"removed":["/home/ada/.bashrc"]}}

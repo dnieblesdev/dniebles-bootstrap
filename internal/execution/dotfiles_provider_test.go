@@ -9,19 +9,68 @@ import (
 )
 
 func TestLocalDotfilesProviderBuildsExactCommand(t *testing.T) {
-	runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusSucceeded}}
+	runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusSucceeded, Stdout: string(readDotlinkReportFixture(t, "all-changed.json"))}}
 	provider := newFakeLocalProvider("/repo", runner)
 
-	err := provider.RunDotlink(context.Background(), []string{"bash", "nvim"})
+	report, err := provider.RunDotlinkReport(context.Background(), []string{"bash"})
 	if err != nil {
-		t.Fatalf("RunDotlink() error = %v", err)
+		t.Fatalf("RunDotlinkReport() error = %v", err)
+	}
+	if report.Status != DotlinkReportStatusSuccess {
+		t.Fatalf("report status = %q, want success", report.Status)
 	}
 	if len(runner.calls) != 1 {
 		t.Fatalf("runner calls = %d, want 1", len(runner.calls))
 	}
-	want := CommandRequest{Executable: "/repo/bin/dotlink", Args: []string{"link", "bash", "nvim"}, Dir: "/repo", Timeout: DefaultDotlinkTimeout}
+	want := CommandRequest{Executable: "/repo/bin/dotlink", Args: []string{"link", "--report=json", "bash"}, Dir: "/repo", Timeout: DefaultDotlinkTimeout}
 	if !reflect.DeepEqual(runner.calls[0], want) {
 		t.Fatalf("CommandRequest = %#v, want %#v", runner.calls[0], want)
+	}
+}
+
+func TestLocalDotfilesProviderReconcilesCommandAndReport(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   CommandResult
+		wantErr  error
+		wantSeen bool
+	}{
+		{name: "success report on success", result: CommandResult{Status: CommandStatusSucceeded, Stdout: string(readDotlinkReportFixture(t, "all-changed.json"))}, wantSeen: true},
+		{name: "failed report on failed command", result: CommandResult{Status: CommandStatusFailed, Stdout: string(readDotlinkReportFixture(t, "failed.json")), Stderr: "human output must be ignored"}, wantSeen: true},
+		{name: "failed report on timed out command", result: CommandResult{Status: CommandStatusTimedOut, Stdout: string(readDotlinkReportFixture(t, "failed.json"))}, wantErr: ErrInconsistentDotlinkReport},
+		{name: "failed report on command not run", result: CommandResult{Status: CommandStatusNotRun, Stdout: string(readDotlinkReportFixture(t, "failed.json"))}, wantErr: ErrInconsistentDotlinkReport},
+		{name: "missing report on failed command", result: CommandResult{Status: CommandStatusFailed, Stderr: string(readDotlinkReportFixture(t, "failed.json"))}, wantErr: ErrDotlinkCommandFailed},
+		{name: "invalid report on failed command", result: CommandResult{Status: CommandStatusFailed, Stdout: "not JSON"}, wantErr: ErrDotlinkCommandFailed},
+		{name: "success report on failed command", result: CommandResult{Status: CommandStatusFailed, Stdout: string(readDotlinkReportFixture(t, "status-exit-mismatch.json"))}, wantErr: ErrInconsistentDotlinkReport},
+		{name: "failed report on success command", result: CommandResult{Status: CommandStatusSucceeded, Stdout: string(readDotlinkReportFixture(t, "failed.json"))}, wantErr: ErrInconsistentDotlinkReport},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeCommandRunner{result: tt.result}
+			provider := newFakeLocalProvider("/repo", runner)
+			report, err := provider.RunDotlinkReport(context.Background(), []string{"bash"})
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("RunDotlinkReport() error = %v, want %v", err, tt.wantErr)
+			}
+			if tt.wantSeen && (err != nil || report.Status == "" || len(report.Entries) == 0) {
+				t.Fatalf("report = %#v, error = %v, want retained validated report", report, err)
+			}
+			if !tt.wantSeen && err != nil && (report.Status != "" || len(report.Entries) != 0) {
+				t.Fatalf("report = %#v, want no trusted report details on failure", report)
+			}
+			if len(runner.calls) != 1 {
+				t.Fatalf("runner calls = %d, want 1", len(runner.calls))
+			}
+		})
+	}
+}
+
+func TestLocalDotfilesProviderLegacyBoundaryFailsForValidatedFailedReport(t *testing.T) {
+	runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusFailed, Stdout: string(readDotlinkReportFixture(t, "failed.json"))}}
+	provider := newFakeLocalProvider("/repo", runner)
+
+	if err := provider.RunDotlink(context.Background(), []string{"bash"}); !errors.Is(err, ErrDotlinkCommandFailed) {
+		t.Fatalf("RunDotlink() error = %v, want ErrDotlinkCommandFailed", err)
 	}
 }
 
@@ -105,7 +154,7 @@ func TestLocalDotfilesProviderEnsureModulesValidatesWithoutRunning(t *testing.T)
 }
 
 func TestLocalDotfilesProviderUsesCanonicalInjectedBaseForCommand(t *testing.T) {
-	runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusSucceeded}}
+	runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusSucceeded, Stdout: string(readDotlinkReportFixture(t, "all-changed.json"))}}
 	provider := &LocalDotfilesProvider{
 		Base:     ResolvedDotfilesBase{CanonicalPath: "/repo-link"},
 		Resolver: DotfilesBaseResolver{HomeDir: func() (string, error) { return "/home/ada", nil }},
@@ -122,7 +171,7 @@ func TestLocalDotfilesProviderUsesCanonicalInjectedBaseForCommand(t *testing.T) 
 	if err := provider.RunDotlink(context.Background(), []string{"bash"}); err != nil {
 		t.Fatalf("RunDotlink() error = %v", err)
 	}
-	want := CommandRequest{Executable: "/repo/bin/dotlink", Args: []string{"link", "bash"}, Dir: "/repo", Timeout: DefaultDotlinkTimeout}
+	want := CommandRequest{Executable: "/repo/bin/dotlink", Args: []string{"link", "--report=json", "bash"}, Dir: "/repo", Timeout: DefaultDotlinkTimeout}
 	if !reflect.DeepEqual(runner.calls, []CommandRequest{want}) {
 		t.Fatalf("runner calls = %#v, want %#v", runner.calls, []CommandRequest{want})
 	}
