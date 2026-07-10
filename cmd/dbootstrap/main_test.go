@@ -985,11 +985,13 @@ func TestRunApplyConfirmedDotfilesUsesInjectedRunner(t *testing.T) {
 
 func TestRunApplyConfirmedDotfilesFailuresExitNonZero(t *testing.T) {
 	tests := []struct {
-		name        string
-		module      string
-		baseSetup   func(t *testing.T) string
-		runner      *recordingCommandRunner
-		wantMessage string
+		name            string
+		module          string
+		baseSetup       func(t *testing.T) string
+		runner          *recordingCommandRunner
+		wantMessage     string
+		wantDetails     []string
+		wantDetailOrder []string
 	}{
 		{
 			name:        "missing base",
@@ -997,6 +999,12 @@ func TestRunApplyConfirmedDotfilesFailuresExitNonZero(t *testing.T) {
 			baseSetup:   func(t *testing.T) string { return filepath.Join(t.TempDir(), "missing-dotfiles") },
 			runner:      &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded, ExitCode: 0}},
 			wantMessage: "resolve dotfiles base",
+			wantDetails: []string{
+				"dotfiles base: source=env",
+				"attempted candidate=", // The full candidate is asserted from the temp path below.
+				"modules=bash",
+				"cause=resolve dotfiles base",
+			},
 		},
 		{
 			name:   "missing dotlink",
@@ -1028,6 +1036,43 @@ func TestRunApplyConfirmedDotfilesFailuresExitNonZero(t *testing.T) {
 				Err:      errors.New("dotlink failed"),
 			}},
 			wantMessage: "dotfile module bash failed",
+		},
+		{
+			name:      "failed report retains detail before nonzero exit",
+			module:    "bash",
+			baseSetup: func(t *testing.T) string { return makeDotfilesBase(t, "bash") },
+			runner: &recordingCommandRunner{result: execution.CommandResult{
+				Status: execution.CommandStatusFailed,
+				Stdout: string(readDotlinkReportFixture(t, "failed.json")),
+			}},
+			wantMessage: "dotfile module bash failed",
+			wantDetails: []string{
+				"link: failed source=bashrc target=/home/ada/.bashrc",
+				"aggregate failure: module=bash cause=link_failed: target exists",
+			},
+		},
+		{
+			name:      "rolled back report renders ordered detail before nonzero exit",
+			module:    "bash",
+			baseSetup: func(t *testing.T) string { return makeDotfilesBase(t, "bash") },
+			runner: &recordingCommandRunner{result: execution.CommandResult{
+				Status: execution.CommandStatusFailed,
+				Stdout: string(readDotlinkReportFixture(t, "rolled-back.json")),
+			}},
+			wantMessage: "dotfile module bash failed",
+			wantDetails: []string{
+				"link: rolled_back source=bashrc target=/home/ada/.bashrc",
+				"cause: rollback: link reverted",
+				"aggregate failure: module=bash cause=link_failed: target exists",
+				"rollback: attempted=true completed=true",
+				"rollback removed: /home/ada/.bashrc",
+			},
+			wantDetailOrder: []string{
+				"link: rolled_back source=bashrc target=/home/ada/.bashrc",
+				"aggregate failure: module=bash cause=link_failed: target exists",
+				"rollback: attempted=true completed=true",
+				"rollback removed: /home/ada/.bashrc",
+			},
 		},
 		{
 			name:      "runner timeout",
@@ -1073,13 +1118,29 @@ func TestRunApplyConfirmedDotfilesFailuresExitNonZero(t *testing.T) {
 				t.Fatalf("run() exit code = %d, want %d", gotCode, exitFailure)
 			}
 			out := stdout.String()
-			for _, want := range []string{"[failed]", tt.wantMessage, "- failed: 1"} {
+			for _, want := range append([]string{"[failed]", tt.wantMessage, "- failed: 1"}, tt.wantDetails...) {
 				if !strings.Contains(out, want) {
 					t.Fatalf("stdout missing %q; got %q", want, out)
 				}
 			}
 			if strings.Contains(out, "[changed]") {
 				t.Fatalf("failed result reported changed: %q", out)
+			}
+			if tt.name == "missing base" {
+				if !strings.Contains(out, "attempted candidate="+base) {
+					t.Fatalf("stdout missing attempted candidate %q: %q", base, out)
+				}
+				if strings.Contains(out, "canonical base="+base) {
+					t.Fatalf("stdout mislabeled unresolved candidate as canonical: %q", out)
+				}
+			}
+			previousIndex := -1
+			for _, detail := range tt.wantDetailOrder {
+				index := strings.Index(out, detail)
+				if index == -1 || index <= previousIndex {
+					t.Fatalf("detail %q was not rendered in order: %q", detail, out)
+				}
+				previousIndex = index
 			}
 			if tt.name == "missing base" || tt.name == "missing dotlink" || tt.name == "missing module" {
 				if len(tt.runner.calls) != 0 {
@@ -1191,6 +1252,15 @@ func writeDotfilesCatalog(t *testing.T, modules ...string) string {
 	catalog.WriteString(strings.Join(refs, ", "))
 	catalog.WriteString("]\n")
 	return writeFile(t, t.TempDir(), "catalog.toml", catalog.String())
+}
+
+func readDotlinkReportFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "internal", "execution", "testdata", "dotlink-report", name))
+	if err != nil {
+		t.Fatalf("read dotlink report fixture %q: %v", name, err)
+	}
+	return fixture
 }
 
 func makeDotfilesBase(t *testing.T, modules ...string) string {

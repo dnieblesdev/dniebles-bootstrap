@@ -72,13 +72,57 @@ func renderExecutionReport(w io.Writer, mode applyMode, report execution.Executi
 	for index, result := range report.Results {
 		fmt.Fprintf(w, "%d. %s [%s]", index+1, renderRef(result.Ref), renderExecutionStepStatus(result.Status))
 		if result.Message != "" {
-			fmt.Fprintf(w, " %s", result.Message)
+			fmt.Fprintf(w, " %s", sanitizeTerminalText(result.Message))
 		}
 		fmt.Fprintln(w)
+		renderLinkDetails(w, result)
 	}
 
 	fmt.Fprintln(w)
 	renderManualActions(w, report)
+}
+
+func renderLinkDetails(w io.Writer, result execution.StepResult) {
+	for _, detail := range result.LinkDetails {
+		fmt.Fprintf(w, "   link: %s source=%s target=%s\n", detail.Outcome, sanitizeTerminalText(detail.Source), sanitizeTerminalText(detail.Target))
+		if detail.Cause != nil {
+			fmt.Fprintf(w, "   cause: %s: %s\n", sanitizeTerminalText(detail.Cause.Code), sanitizeTerminalText(detail.Cause.Message))
+		}
+	}
+	if result.Failure != nil {
+		fmt.Fprintf(w, "   aggregate failure: module=%s cause=%s: %s\n", sanitizeTerminalText(result.Failure.Module), sanitizeTerminalText(result.Failure.Cause.Code), sanitizeTerminalText(result.Failure.Cause.Message))
+	}
+	if result.Rollback.Attempted || result.Rollback.Completed || len(result.Rollback.Removed) > 0 {
+		fmt.Fprintf(w, "   rollback: attempted=%t completed=%t\n", result.Rollback.Attempted, result.Rollback.Completed)
+		for _, removed := range result.Rollback.Removed {
+			fmt.Fprintf(w, "   rollback removed: %s\n", sanitizeTerminalText(removed))
+		}
+	}
+	if result.BaseDiagnostic != nil {
+		diagnostic := result.BaseDiagnostic
+		modules := sanitizeTerminalText(strings.Join(diagnostic.Modules, ", "))
+		if diagnostic.CanonicalPath != "" {
+			fmt.Fprintf(w, "   dotfiles base: canonical base=%s source=%s modules=%s\n", sanitizeTerminalText(diagnostic.CanonicalPath), sanitizeTerminalText(string(diagnostic.Source)), modules)
+			return
+		}
+		fmt.Fprintf(w, "   dotfiles base: source=%s attempted candidate=%s modules=%s", sanitizeTerminalText(string(diagnostic.Source)), sanitizeTerminalText(diagnostic.AttemptedCandidate), modules)
+		if diagnostic.Cause != "" {
+			fmt.Fprintf(w, " cause=%s", sanitizeTerminalText(diagnostic.Cause))
+		}
+		fmt.Fprintln(w)
+	}
+}
+
+func sanitizeTerminalText(value string) string {
+	var sanitized strings.Builder
+	for _, r := range value {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			fmt.Fprintf(&sanitized, `\x%02x`, r)
+			continue
+		}
+		sanitized.WriteRune(r)
+	}
+	return sanitized.String()
 }
 
 func renderExecutionSummary(w io.Writer, results []execution.StepResult) {

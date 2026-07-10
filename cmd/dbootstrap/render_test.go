@@ -199,6 +199,107 @@ func TestRenderExecutionReportFramesConfirmedModeMutability(t *testing.T) {
 	}
 }
 
+func TestRenderExecutionReportRendersDotlinkDetailsAndBaseDiagnostic(t *testing.T) {
+	report := execution.ExecutionReport{Results: []execution.StepResult{{
+		Ref:     planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "bash"},
+		Status:  execution.StepStatusFailed,
+		Message: "dotfile module bash failed",
+		LinkDetails: []execution.LinkDetail{
+			{Module: "bash", Source: "bashrc", Target: "/home/ada/.bashrc", Outcome: execution.LinkOutcomeChanged},
+			{Module: "bash", Source: "profile", Target: "/home/ada/.profile", Outcome: execution.LinkOutcomeUnchanged},
+			{Module: "bash", Source: "profile", Target: "/home/ada/.profile", Outcome: execution.LinkOutcomeRolledBack, Cause: &execution.LinkCause{Code: "conflict", Message: "target exists"}},
+		},
+		Failure:        &execution.LinkFailure{Module: "bash", Cause: execution.LinkCause{Code: "conflict", Message: "target exists"}},
+		Rollback:       execution.LinkRollback{Attempted: true, Completed: true, Removed: []string{"/home/ada/.bashrc"}},
+		BaseDiagnostic: &execution.DotfilesBaseDiagnostic{Source: execution.DotfilesBaseSourceEnv, AttemptedCandidate: "/tmp/dotfiles", Modules: []string{"bash"}, Cause: "resolve dotfiles base: unavailable"},
+	}}}
+
+	var stdout bytes.Buffer
+	renderExecutionReport(&stdout, applyModeConfirmed, report)
+	got := stdout.String()
+	for _, want := range []string{
+		"dotfile:bash [failed] dotfile module bash failed",
+		"link: changed source=bashrc target=/home/ada/.bashrc",
+		"link: unchanged source=profile target=/home/ada/.profile",
+		"link: rolled_back source=profile target=/home/ada/.profile",
+		"cause: conflict: target exists",
+		"aggregate failure: module=bash cause=conflict: target exists",
+		"rollback: attempted=true completed=true",
+		"rollback removed: /home/ada/.bashrc",
+		"dotfiles base: source=env attempted candidate=/tmp/dotfiles modules=bash cause=resolve dotfiles base: unavailable",
+	} {
+		if !bytes.Contains([]byte(got), []byte(want)) {
+			t.Fatalf("stdout missing %q: %q", want, got)
+		}
+	}
+	if bytes.Contains([]byte(got), []byte("canonical base=/tmp/dotfiles")) {
+		t.Fatalf("unresolved base rendered as canonical: %q", got)
+	}
+}
+
+func TestRenderExecutionReportPreservesRemovedRollbackPathsWithoutAttemptFlag(t *testing.T) {
+	report := execution.ExecutionReport{Results: []execution.StepResult{{
+		Ref:      planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "bash"},
+		Status:   execution.StepStatusFailed,
+		Message:  "dotfile module bash failed",
+		Rollback: execution.LinkRollback{Removed: []string{"/home/ada/.bashrc"}},
+	}}}
+
+	var stdout bytes.Buffer
+	renderExecutionReport(&stdout, applyModeConfirmed, report)
+	got := stdout.String()
+	for _, want := range []string{
+		"rollback: attempted=false completed=false",
+		"rollback removed: /home/ada/.bashrc",
+	} {
+		if !bytes.Contains([]byte(got), []byte(want)) {
+			t.Fatalf("stdout missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestRenderExecutionReportLabelsValidatedBaseCanonical(t *testing.T) {
+	report := execution.ExecutionReport{Results: []execution.StepResult{{
+		Ref:            planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "bash"},
+		Status:         execution.StepStatusInstalled,
+		BaseDiagnostic: &execution.DotfilesBaseDiagnostic{Source: execution.DotfilesBaseSourceEnv, CanonicalPath: "/repo/.dotfiles", Modules: []string{"bash"}},
+	}}}
+	var stdout bytes.Buffer
+	renderExecutionReport(&stdout, applyModeConfirmed, report)
+	if got := stdout.String(); !bytes.Contains([]byte(got), []byte("dotfiles base: canonical base=/repo/.dotfiles source=env modules=bash")) {
+		t.Fatalf("stdout missing canonical base context: %q", got)
+	}
+}
+
+func TestRenderExecutionReportEscapesTerminalControlsInDotlinkDetails(t *testing.T) {
+	report := execution.ExecutionReport{Results: []execution.StepResult{{
+		Ref:     planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "bash"},
+		Status:  execution.StepStatusFailed,
+		Message: "dotfile module bash failed: aggregate\x1b[2Jmessage\n",
+		LinkDetails: []execution.LinkDetail{{
+			Source:  "bash\x1b[2Jrc",
+			Target:  "/home/ada/\x1b]8;;https://example.test\x1b\\.bashrc",
+			Outcome: execution.LinkOutcomeFailed,
+			Cause:   &execution.LinkCause{Code: "conflict\r", Message: "target\nexists"},
+		}},
+		Failure:        &execution.LinkFailure{Module: "bash\x1b[31m", Cause: execution.LinkCause{Code: "failed", Message: "bad\tstate"}},
+		Rollback:       execution.LinkRollback{Attempted: true, Removed: []string{"/home/ada/\x1b[?25l.bashrc"}},
+		BaseDiagnostic: &execution.DotfilesBaseDiagnostic{Source: execution.DotfilesBaseSourceEnv, AttemptedCandidate: "/tmp/\x1b[2Jdotfiles", Modules: []string{"bash\n"}, Cause: "invalid\rcandidate"},
+	}}}
+
+	var stdout bytes.Buffer
+	renderExecutionReport(&stdout, applyModeConfirmed, report)
+	got := stdout.String()
+	if bytes.ContainsRune([]byte(got), '\x1b') || bytes.ContainsRune([]byte(got), '\r') {
+		t.Fatalf("rendered terminal control character: %q", got)
+	}
+	for _, want := range []string{"aggregate\\x1b[2Jmessage\\x0a", "bash\\x1b[2Jrc", "target\\x0aexists", "conflict\\x0d", "bad\\x09state", "/tmp/\\x1b[2Jdotfiles"} {
+		if !bytes.Contains([]byte(got), []byte(want)) {
+			t.Fatalf("stdout missing escaped value %q: %q", want, got)
+		}
+	}
+}
+
 func TestRenderExecutionReportHandlesEmptyReport(t *testing.T) {
 	var stdout bytes.Buffer
 	renderExecutionReport(&stdout, applyModeDefaultNonMutating, execution.ExecutionReport{})

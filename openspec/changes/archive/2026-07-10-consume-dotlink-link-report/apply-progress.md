@@ -138,3 +138,63 @@ actionContext:
 warnings: []
 nextRecommended: apply-next-pr2-slice
 ```
+
+## PR 2 — execution translation, diagnostics, and rendering
+
+Completed tasks 5–8 from the clean PR 1 baseline. No commit was created.
+
+### TDD cycle evidence
+
+- **RED:** `go test ./internal/execution ./cmd/dbootstrap` — expected FAIL before production changes: new behavior tests referenced undefined `LinkOutcome`, `LinkDetail`, `LinkFailure`, `LinkRollback`, `DotfilesBaseDiagnostic`, and `StepResult` detail fields.
+- **GREEN:** `gofmt -w internal/execution/types.go internal/execution/dotfiles_installer.go internal/execution/dotfiles_provider.go internal/execution/provider.go internal/execution/dotfiles_installer_test.go cmd/dbootstrap/render.go cmd/dbootstrap/render_test.go && go test ./internal/execution ./cmd/dbootstrap` — PASS after implementing the execution-owned translation and rendering boundary.
+- **TRIANGULATE:** The focused suite covers changed-only, unchanged-only, mixed, failed, rolled-back, aggregate failure, ordered source/target preservation, safe generic provider errors without inferred links, unresolved-base wording, confirmed non-zero failure detail, and pre-existing safe-mode zero-runner / usage rejection cases.
+
+### Implementation
+
+- Added execution-owned ordered link details, outcomes, aggregate failure, rollback, and safe base diagnostics while retaining legacy aggregate `StepStatus` for ordinary installers.
+- `DotfilesInstaller` consumes validated reports when the provider supports them: all unchanged maps to skipped; changed/mixed success maps to installed; failed, rolled-back, or aggregate-failed reports map to failed. Generic provider errors carry no inferred link details.
+- `LocalDotfilesProvider` supplies attempted candidate, source, selected modules, safe cause, and canonical base only after successful resolution.
+- CLI rendering prints the aggregate step first, then link details, aggregate failure, rollback data, and base diagnostics deterministically. Confirmed failed reports render details before returning non-zero.
+- Default and dry-run behavior remains the existing non-mutating noop path with no command-runner construction.
+
+### Verification
+
+- `go test ./internal/execution ./cmd/dbootstrap` — PASS.
+- `go test ./...` — PASS.
+- `go test -cover ./...` — PASS.
+- `go vet ./...` — PASS.
+- `gofmt -w internal/execution/types.go internal/execution/dotfiles_installer.go internal/execution/dotfiles_provider.go internal/execution/provider.go internal/execution/dotfiles_installer_test.go internal/execution/dotfiles_provider_test.go cmd/dbootstrap/render.go cmd/dbootstrap/render_test.go cmd/dbootstrap/main_test.go` — applied.
+
+### Scope and rollback boundary
+
+- `openspec/changes/dotfiles-base-failure-context/` remains untracked and untouched as required.
+- Reverting PR 2 removes only report-to-execution translation, base diagnostic presentation, and rendering integration; PR 1 parser/provider reconciliation remains intact.
+
+## Corrective PR 2 — reliability coverage
+
+### Completed tasks
+
+- Added a parsed aggregate `failed` JSON report scenario with only changed/unchanged entries; after isolating the parser-required failure context, it proves aggregate status maps the dotfile module result to `StepStatusFailed`.
+- Added confirmed CLI coverage using `rolled-back.json`; it asserts rollback link, aggregate failure, rollback state, and removed target render in order before the failed command returns a non-zero exit.
+
+### TDD cycle evidence
+
+- **RED:** `go test ./internal/execution ./cmd/dbootstrap` — expected test setup failure observed because a `status: failed` report without its required failure object is invalid under the strict parser.
+- **GREEN:** Corrected the fixture to satisfy the parser contract and isolated `report.Status`; `go test ./internal/execution ./cmd/dbootstrap` — PASS. No production change was required because existing translation and rendering already satisfied both behaviors.
+- **TRIANGULATE:** `go test ./...` — PASS; `go vet ./...` — PASS.
+
+### Files changed
+
+- `internal/execution/dotfiles_installer_test.go`
+- `cmd/dbootstrap/main_test.go`
+- `openspec/changes/consume-dotlink-link-report/tasks.md`
+- `openspec/changes/consume-dotlink-link-report/apply-progress.md`
+
+## Verification checkbox reconciliation
+
+The formal verifier found two stale PR 1 Task 1 checkboxes. Both are now checked because their RED/GREEN evidence is already recorded above:
+
+- Table-driven parser/provider/installer/CLI coverage was added before implementation across the documented test files.
+- RED was observed with `go test ./internal/execution ./cmd/dbootstrap` failing on the missing parser/report detail/reconciliation symbols; the exact parser/provider RED commands and PR 2 RED command are recorded in the respective cycle sections.
+
+Delivery metadata is also reconciled: the user selected two ordered local work-unit commits rather than a remote stacked PR strategy.

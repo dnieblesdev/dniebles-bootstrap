@@ -74,6 +74,46 @@ func TestLocalDotfilesProviderLegacyBoundaryFailsForValidatedFailedReport(t *tes
 	}
 }
 
+func TestLocalDotfilesProviderBaseDiagnosticKeepsUnresolvedCandidateNonCanonical(t *testing.T) {
+	provider := &LocalDotfilesProvider{
+		Base:     ResolvedDotfilesBase{RawPath: "/candidate/dotfiles", CanonicalPath: "/candidate/dotfiles", Source: DotfilesBaseSourceEnv},
+		Resolver: DotfilesBaseResolver{HomeDir: func() (string, error) { return "/home/ada", nil }},
+		Runner:   &fakeCommandRunner{},
+		Stat:     func(string) (os.FileInfo, error) { return nil, os.ErrNotExist },
+		EvalSymlinks: fakeEval(map[string]string{
+			"/home/ada":           "/home/ada",
+			"/candidate/dotfiles": "/candidate/dotfiles",
+		}),
+	}
+
+	diagnostic := provider.DotfilesBaseDiagnostic([]string{"bash"})
+	if diagnostic.AttemptedCandidate != "/candidate/dotfiles" || diagnostic.Source != DotfilesBaseSourceEnv || diagnostic.CanonicalPath != "" || diagnostic.Cause == "" {
+		t.Fatalf("diagnostic = %#v, want attempted env candidate without canonical path and with cause", diagnostic)
+	}
+	if !reflect.DeepEqual(diagnostic.Modules, []string{"bash"}) {
+		t.Fatalf("diagnostic modules = %#v, want [bash]", diagnostic.Modules)
+	}
+}
+
+func TestLocalDotfilesProviderBaseDiagnosticRetainsEnvCandidateWhenHomeLookupFails(t *testing.T) {
+	homeErr := errors.New("home unavailable")
+	provider := &LocalDotfilesProvider{Resolver: DotfilesBaseResolver{
+		LookupEnv: func(string) (string, bool) { return "/work/dotfiles", true },
+		HomeDir:   func() (string, error) { return "", homeErr },
+	}}
+
+	diagnostic := provider.DotfilesBaseDiagnostic([]string{"bash"})
+	if got, want := diagnostic.Source, DotfilesBaseSourceEnv; got != want {
+		t.Fatalf("Source = %q, want %q", got, want)
+	}
+	if got, want := diagnostic.AttemptedCandidate, "/work/dotfiles"; got != want {
+		t.Fatalf("AttemptedCandidate = %q, want %q", got, want)
+	}
+	if got, want := diagnostic.Cause, "resolve home directory: home unavailable"; got != want {
+		t.Fatalf("Cause = %q, want home lookup failure", diagnostic.Cause)
+	}
+}
+
 func TestLocalDotfilesProviderValidationFailuresDoNotRun(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -220,6 +260,25 @@ func TestLocalDotfilesProviderRejectsUnsafeInjectedBase(t *testing.T) {
 				t.Fatalf("runner calls = %d, want 0", len(runner.calls))
 			}
 		})
+	}
+}
+
+func TestLocalDotfilesProviderRejectsForgedUnsafeExecutionContext(t *testing.T) {
+	runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusSucceeded}}
+	provider := newFakeLocalProvider("/repo", runner)
+	provider.EvalSymlinks = fakeEval(map[string]string{
+		"/home/ada": "/home/ada",
+		"/":         "/",
+	})
+
+	_, err := provider.RunDotlinkReportWithExecutionContext(context.Background(), []string{"bash"}, DotfilesExecutionContext{
+		Base: ResolvedDotfilesBase{CanonicalPath: "/"},
+	})
+	if !errors.Is(err, ErrUnsafeDotfilesBase) {
+		t.Fatalf("RunDotlinkReportWithExecutionContext() error = %v, want unsafe base error", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %d, want 0", len(runner.calls))
 	}
 }
 

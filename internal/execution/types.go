@@ -15,10 +15,60 @@ const (
 
 // StepResult describes the outcome of executing a single plan step.
 type StepResult struct {
-	Ref     planning.ResourceRef
-	Status  StepStatus
+	Ref            planning.ResourceRef
+	Status         StepStatus
+	Message        string
+	Err            error
+	LinkDetails    []LinkDetail
+	Failure        *LinkFailure
+	Rollback       LinkRollback
+	BaseDiagnostic *DotfilesBaseDiagnostic
+}
+
+// LinkOutcome is the execution-owned outcome for one validated dotlink entry.
+// It deliberately does not reuse the provider report type.
+type LinkOutcome string
+
+const (
+	LinkOutcomeChanged    LinkOutcome = "changed"
+	LinkOutcomeUnchanged  LinkOutcome = "unchanged"
+	LinkOutcomeFailed     LinkOutcome = "failed"
+	LinkOutcomeRolledBack LinkOutcome = "rolled_back"
+)
+
+// LinkDetail retains the validated, ordered facts for one link operation.
+type LinkDetail struct {
+	Module  string
+	Source  string
+	Target  string
+	Outcome LinkOutcome
+	Cause   *LinkCause
+}
+
+type LinkCause struct {
+	Code    string
 	Message string
-	Err     error
+}
+
+type LinkFailure struct {
+	Module string
+	Cause  LinkCause
+}
+
+type LinkRollback struct {
+	Attempted bool
+	Completed bool
+	Removed   []string
+}
+
+// DotfilesBaseDiagnostic holds safe base-resolution context. CanonicalPath is
+// populated only after canonicalization and safety validation succeed.
+type DotfilesBaseDiagnostic struct {
+	Source             DotfilesBaseSource
+	AttemptedCandidate string
+	CanonicalPath      string
+	Modules            []string
+	Cause              string
 }
 
 // ManualAction is a provider-owned, non-mutating action that the operator must

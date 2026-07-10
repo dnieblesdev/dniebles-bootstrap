@@ -102,6 +102,28 @@ func TestResolveDotfilesBasePathRejectsCanonicalHomeAlias(t *testing.T) {
 	}
 }
 
+func TestResolveWithDiagnosticReportsHomeSourceWhenHomeLookupFails(t *testing.T) {
+	homeErr := errors.New("home unavailable")
+	resolver := DotfilesBaseResolver{
+		LookupEnv: func(string) (string, bool) { return "", false },
+		HomeDir:   func() (string, error) { return "", homeErr },
+	}
+
+	_, diagnostic, err := resolver.ResolveWithDiagnostic([]string{"bash"})
+	if !errors.Is(err, homeErr) {
+		t.Fatalf("ResolveWithDiagnostic() error = %v, want %v", err, homeErr)
+	}
+	if diagnostic.Source != DotfilesBaseSourceHome {
+		t.Fatalf("diagnostic source = %q, want %q", diagnostic.Source, DotfilesBaseSourceHome)
+	}
+	if diagnostic.AttemptedCandidate != "" || diagnostic.CanonicalPath != "" {
+		t.Fatalf("diagnostic paths = %#v, want no candidate or canonical path", diagnostic)
+	}
+	if diagnostic.Cause != "resolve home directory: home unavailable" {
+		t.Fatalf("diagnostic cause = %q", diagnostic.Cause)
+	}
+}
+
 func fakeDotfilesBaseResolver(envValue string, envSet bool, home string) DotfilesBaseResolver {
 	return DotfilesBaseResolver{
 		LookupEnv: func(string) (string, bool) { return envValue, envSet },

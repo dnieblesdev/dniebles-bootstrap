@@ -41,6 +41,14 @@ func ResolveDotfilesBasePath() (ResolvedDotfilesBase, error) {
 }
 
 func (r DotfilesBaseResolver) Resolve() (ResolvedDotfilesBase, error) {
+	base, _, err := r.ResolveWithDiagnostic(nil)
+	return base, err
+}
+
+// ResolveWithDiagnostic resolves the base once while retaining the safe context
+// needed to report failures without presenting an unvalidated path as canonical.
+func (r DotfilesBaseResolver) ResolveWithDiagnostic(modules []string) (ResolvedDotfilesBase, DotfilesBaseDiagnostic, error) {
+	diagnostic := DotfilesBaseDiagnostic{Modules: append([]string(nil), modules...)}
 	lookupEnv := r.LookupEnv
 	if lookupEnv == nil {
 		lookupEnv = os.LookupEnv
@@ -58,39 +66,50 @@ func (r DotfilesBaseResolver) Resolve() (ResolvedDotfilesBase, error) {
 		stat = os.Stat
 	}
 
-	home, err := homeDir()
-	if err != nil {
-		return ResolvedDotfilesBase{}, fmt.Errorf("resolve home directory: %w", err)
+	raw, source, envSet := "", DotfilesBaseSourceHome, false
+	diagnostic.Source = source
+	if value, ok := lookupEnv(dotfilesEnvVar); ok {
+		raw, source, envSet = value, DotfilesBaseSourceEnv, true
+		diagnostic.AttemptedCandidate = raw
+		diagnostic.Source = source
+		if raw == "" {
+			diagnostic.Cause = ErrEmptyDotfilesBase.Error()
+			return ResolvedDotfilesBase{}, diagnostic, ErrEmptyDotfilesBase
+		}
 	}
 
-	raw, source, err := selectedDotfilesBase(lookupEnv, home)
+	home, err := homeDir()
 	if err != nil {
-		return ResolvedDotfilesBase{}, err
+		err = fmt.Errorf("resolve home directory: %w", err)
+		diagnostic.Cause = err.Error()
+		return ResolvedDotfilesBase{}, diagnostic, err
+	}
+	if !envSet {
+		raw, source = filepath.Join(home, ".dotfiles"), DotfilesBaseSourceHome
+		diagnostic.AttemptedCandidate = raw
+		diagnostic.Source = source
 	}
 
 	canonicalHome, err := canonicalizeDotfilesPath(home, evalSymlinks)
 	if err != nil {
-		return ResolvedDotfilesBase{}, fmt.Errorf("resolve home directory %q: %w", home, err)
+		err = fmt.Errorf("resolve home directory %q: %w", home, err)
+		diagnostic.Cause = err.Error()
+		return ResolvedDotfilesBase{}, diagnostic, err
 	}
 
 	canonical, err := canonicalizeDotfilesPath(raw, evalSymlinks)
 	if err != nil {
-		return ResolvedDotfilesBase{}, fmt.Errorf("resolve dotfiles base %q: %w", raw, err)
+		err = fmt.Errorf("resolve dotfiles base %q: %w", raw, err)
+		diagnostic.Cause = err.Error()
+		return ResolvedDotfilesBase{}, diagnostic, err
 	}
 	if err := validateDotfilesBase(canonical, canonicalHome, stat); err != nil {
-		return ResolvedDotfilesBase{}, err
+		diagnostic.Cause = err.Error()
+		return ResolvedDotfilesBase{}, diagnostic, err
 	}
-	return ResolvedDotfilesBase{RawPath: raw, CanonicalPath: filepath.Clean(canonical), Source: source}, nil
-}
-
-func selectedDotfilesBase(lookupEnv func(string) (string, bool), home string) (string, DotfilesBaseSource, error) {
-	if value, ok := lookupEnv(dotfilesEnvVar); ok {
-		if value == "" {
-			return "", "", ErrEmptyDotfilesBase
-		}
-		return value, DotfilesBaseSourceEnv, nil
-	}
-	return filepath.Join(home, ".dotfiles"), DotfilesBaseSourceHome, nil
+	base := ResolvedDotfilesBase{RawPath: raw, CanonicalPath: filepath.Clean(canonical), Source: source}
+	diagnostic.CanonicalPath = base.CanonicalPath
+	return base, diagnostic, nil
 }
 
 func canonicalizeDotfilesPath(path string, evalSymlinks func(string) (string, error)) (string, error) {

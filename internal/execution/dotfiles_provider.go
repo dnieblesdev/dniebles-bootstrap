@@ -39,7 +39,33 @@ func NewLocalDotfilesProvider(runner CommandRunner, resolver DotfilesBaseResolve
 }
 
 func (p *LocalDotfilesProvider) DotfilesBase() (ResolvedDotfilesBase, error) {
-	return p.resolvedBase()
+	context := p.ResolveDotfilesExecutionContext(nil)
+	return context.Base, context.Err
+}
+
+// DotfilesBaseDiagnostic returns safe resolution context for a selected module
+// set. It never calls the command runner. A canonical path is exposed only when
+// the base has passed canonicalization and safety validation.
+func (p *LocalDotfilesProvider) DotfilesBaseDiagnostic(modules []string) DotfilesBaseDiagnostic {
+	return p.ResolveDotfilesExecutionContext(modules).Diagnostic
+}
+
+func (p *LocalDotfilesProvider) ResolveDotfilesExecutionContext(modules []string) DotfilesExecutionContext {
+	if p.Base.CanonicalPath != "" {
+		diagnostic := DotfilesBaseDiagnostic{Source: p.Base.Source, AttemptedCandidate: p.Base.RawPath, Modules: append([]string(nil), modules...)}
+		if diagnostic.AttemptedCandidate == "" {
+			diagnostic.AttemptedCandidate = p.Base.CanonicalPath
+		}
+		base, err := p.resolvedBase()
+		if err != nil {
+			diagnostic.Cause = err.Error()
+			return DotfilesExecutionContext{Diagnostic: diagnostic, Err: err}
+		}
+		diagnostic.CanonicalPath = base.CanonicalPath
+		return DotfilesExecutionContext{Base: base, Diagnostic: diagnostic, validatedBase: base.CanonicalPath}
+	}
+	base, diagnostic, err := p.Resolver.ResolveWithDiagnostic(modules)
+	return DotfilesExecutionContext{Base: base, Diagnostic: diagnostic, Err: err, validatedBase: base.CanonicalPath}
 }
 
 func (p *LocalDotfilesProvider) EnsureModules(_ context.Context, modules []string) error {
@@ -66,9 +92,20 @@ func (p *LocalDotfilesProvider) RunDotlink(ctx context.Context, modules []string
 // RunDotlinkReport executes dotlink once and returns only a validated report.
 // Stderr is deliberately never inspected.
 func (p *LocalDotfilesProvider) RunDotlinkReport(ctx context.Context, modules []string) (DotlinkLinkReport, error) {
-	base, err := p.resolvedBase()
-	if err != nil {
-		return DotlinkLinkReport{}, err
+	return p.RunDotlinkReportWithExecutionContext(ctx, modules, p.ResolveDotfilesExecutionContext(modules))
+}
+
+func (p *LocalDotfilesProvider) RunDotlinkReportWithExecutionContext(ctx context.Context, modules []string, baseContext DotfilesExecutionContext) (DotlinkLinkReport, error) {
+	if baseContext.Err != nil {
+		return DotlinkLinkReport{}, baseContext.Err
+	}
+	base := baseContext.Base
+	if baseContext.validatedBase == "" || baseContext.validatedBase != base.CanonicalPath {
+		canonicalBase, err := p.validateResolvedBase(base.CanonicalPath)
+		if err != nil {
+			return DotlinkLinkReport{}, err
+		}
+		base.CanonicalPath = canonicalBase
 	}
 	if err := p.validateRepo(base.CanonicalPath, modules); err != nil {
 		return DotlinkLinkReport{}, err

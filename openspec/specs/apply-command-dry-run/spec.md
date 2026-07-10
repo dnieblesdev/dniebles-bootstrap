@@ -48,6 +48,7 @@ Planning failures MUST stop the command before execution begins.
 
 The apply command MUST render a Summary section in default, `--dry-run`, and `--yes` modes when execution results exist.
 The Summary MUST use the user-facing categories `changed`, `unchanged`, `not supported yet`, and `failed`.
+Confirmed dotfile summaries MAY additionally reflect aggregate module categories: `changed` for installed, `unchanged` for skipped, and `failed` for failed aggregates. A failed aggregate with rolled-back entries MAY include a `rolled_back` breakdown, but it MUST remain failed for exit status.
 
 #### Scenario: Summary appears in default mode
 
@@ -89,7 +90,7 @@ Successful dry-run execution MUST report `not_implemented` results, while confir
 Homebrew bootstrap reporting MUST remain advisory and non-mutating in default and `--dry-run` modes.
 User-facing step output MUST describe internally `not_implemented` work as `not supported yet`.
 Confirmed `--yes` output MUST explicitly state that brew-backed `tool` and `package` steps and selected dotfile resources may have changed the machine; unsupported, non-brew, and unselected work remains non-mutating or `not supported yet`.
-When dotfiles execution is eligible or attempted, output MUST include the canonical dotfiles base path, the base source, and selected module names before or with the dotfile result.
+When dotfiles execution is attempted, output MUST render the aggregate module result and every validated per-link detail. A resolution failure MUST show attempted source/candidate, selected modules, and safe cause; it MUST show `canonical base` only after successful canonicalization and validation.
 
 #### Scenario: Dry-run execution reports not_implemented
 
@@ -124,10 +125,19 @@ When dotfiles execution is eligible or attempted, output MUST include the canoni
 #### Scenario: Dotfiles execution context is reported
 
 - GIVEN `dbootstrap apply --yes` reaches the dotfiles execution path
+- AND base resolution succeeds and is validated
 - WHEN execution reporting is rendered
 - THEN the output includes the canonical dotfiles base path
 - AND the output includes whether the base came from `DBOOTSTRAP_DOTFILES_DIR` or the home convention
 - AND the output includes the selected module names
+
+#### Scenario: Resolution failure is not mislabeled
+
+- GIVEN `dbootstrap apply --yes` reaches the dotfiles execution path
+- AND base resolution fails before validation
+- WHEN execution reporting is rendered
+- THEN attempted source/candidate, selected modules, and safe cause are shown
+- AND no attempted candidate is labeled canonical base
 
 ### Requirement: Apply remains strictly non-mutating
 
