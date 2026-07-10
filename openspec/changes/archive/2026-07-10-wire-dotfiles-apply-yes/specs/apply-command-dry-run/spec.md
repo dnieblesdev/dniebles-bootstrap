@@ -2,85 +2,30 @@
 
 ## ADDED Requirements
 
-### Requirement: Apply command exists with plan-style target flags
+### Requirement: Confirmed apply exits non-zero when eligible execution fails
 
-The `apply` command MUST exist and MUST accept `--profile`, repeatable `--resource`, and `--catalog` using the same validation rules as `plan`.
-The command MUST surface Homebrew bootstrap reporting when Homebrew-backed resources are missing `brew`, while keeping every accepted mode non-mutating.
+When `apply --yes` attempts eligible real execution and any eligible step reports `failed`, the CLI MUST return a non-zero exit status after rendering the execution report.
+This includes dotfiles failures caused by missing base path, missing `bin/dotlink`, missing selected module, command-runner failure, or command timeout.
+Default apply and `--dry-run` MUST remain non-mutating and MUST NOT use this rule to imply real execution was attempted.
 
-#### Scenario: Apply accepts the same targets as plan
+#### Scenario: Missing dotfiles prerequisite makes confirmed apply fail
 
-- GIVEN the user provides valid `--profile`, `--resource`, or `--catalog` values
-- WHEN `dbootstrap apply` runs
-- THEN the command accepts the same target surface as `plan`
+- GIVEN a selected dotfile resource is eligible under `apply --yes`
+- AND the dotfiles base path, dotlink executable, or selected module is missing
+- WHEN apply renders the execution report
+- THEN the dotfile step is reported as failed
+- AND the CLI exits non-zero
 
-#### Scenario: Invalid target input is rejected
+#### Scenario: Dotlink runner failure makes confirmed apply fail
 
-- GIVEN the user provides malformed or unsupported target input
-- WHEN `dbootstrap apply` runs
-- THEN the command fails with a clear validation error
+- GIVEN a selected dotfile resource is eligible under `apply --yes`
+- AND the injected command runner reports failure or timeout
+- WHEN apply renders the execution report
+- THEN the dotfile step is reported as failed
+- AND the CLI exits non-zero
+- AND no retry or fallback acquisition is attempted
 
-#### Scenario: Missing brew is reported without mutation
-
-- GIVEN a Homebrew-backed resource is selected
-- WHEN `dbootstrap apply` runs on a host without `brew`
-- THEN the report includes a bootstrap action
-- AND no host mutation occurs
-
-### Requirement: Apply reuses the planning pipeline
-
-The `apply` command MUST build its request through the existing planning pipeline before any execution report is produced.
-Planning failures MUST stop the command before execution begins.
-
-#### Scenario: Planning failure stops apply early
-
-- GIVEN planning cannot build a valid plan
-- WHEN `dbootstrap apply` runs
-- THEN the command exits with the planning error
-- AND no execution report is rendered
-
-#### Scenario: Successful planning continues to execution
-
-- GIVEN planning succeeds
-- WHEN `dbootstrap apply` runs
-- THEN the resulting plan is passed into execution
-
-### Requirement: Apply execution summary is always rendered
-
-The apply command MUST render a Summary section in default, `--dry-run`, and `--yes` modes when execution results exist.
-The Summary MUST use the user-facing categories `changed`, `unchanged`, `not supported yet`, and `failed`.
-
-#### Scenario: Summary appears in default mode
-
-- GIVEN the user runs `dbootstrap apply` successfully
-- WHEN execution reporting is rendered
-- THEN the output includes a Summary section
-- AND the Summary uses the user-facing categories
-
-#### Scenario: Summary appears in dry-run mode
-
-- GIVEN the user runs `dbootstrap apply --dry-run` successfully
-- WHEN execution reporting is rendered
-- THEN the output includes a Summary section
-- AND the Summary uses the user-facing categories
-
-#### Scenario: Summary appears in confirmed mode
-
-- GIVEN the user runs `dbootstrap apply --yes` successfully
-- WHEN execution reporting is rendered
-- THEN the output includes a Summary section
-- AND the Summary uses the user-facing categories
-
-### Requirement: Empty selected plans render an explicit empty state
-
-The apply command MUST render a clear empty-state sentence when the selected plan has zero actionable or selected steps.
-The command MUST NOT render a zero-count summary table for that case.
-
-#### Scenario: Empty selected plan shows a sentence
-
-- GIVEN the selected plan has no actionable or selected steps
-- WHEN apply renders execution reporting
-- THEN the output contains a clear empty-state sentence
-- AND no zero-count summary table is shown
+## MODIFIED Requirements
 
 ### Requirement: Apply renders execution mode-specific reporting
 
@@ -88,7 +33,7 @@ The apply command MUST render an execution report separate from plan rendering.
 Successful dry-run execution MUST report `not_implemented` results, while confirmed mode MAY report real brew execution for brew-backed tool/package steps and MAY run selected dotfile resources through the dotfiles execution provider.
 Homebrew bootstrap reporting MUST remain advisory and non-mutating in default and `--dry-run` modes.
 User-facing step output MUST describe internally `not_implemented` work as `not supported yet`.
-Confirmed `--yes` output MUST explicitly state that brew-backed `tool` and `package` steps and selected dotfile resources may have changed the machine; unsupported, non-brew, and unselected work remains non-mutating or `not supported yet`.
+Confirmed `--yes` output MUST explicitly state that brew-backed `tool` and `package` steps and selected `dotfile` resources may have changed the machine; unsupported, non-brew, and unselected work remains non-mutating or `not supported yet`.
 When dotfiles execution is eligible or attempted, output MUST include the canonical dotfiles base path, the base source, and selected module names before or with the dotfile result.
 
 #### Scenario: Dry-run execution reports not_implemented
@@ -111,7 +56,7 @@ When dotfiles execution is eligible or attempted, output MUST include the canoni
 - GIVEN a brew-backed tool or package step is present
 - WHEN `dbootstrap apply --yes` runs the execution phase
 - THEN the step may report real brew execution
-- AND other step kinds remain non-mutating or unsupported
+- AND unsupported non-brew work remains non-mutating or unsupported
 
 #### Scenario: Confirmed dotfile steps can report real execution
 
@@ -135,24 +80,25 @@ The `apply` command MUST NOT perform real execution, host mutation, dotlink, clo
 It MUST remain a safe noop bridge over the existing plan unless `--yes` is explicitly provided.
 In confirmed `--yes` mode, mutation MUST remain limited to brew-backed tool/package execution and selected dotfile resource execution.
 
-#### Scenario: No host mutation occurs
+#### Scenario: Default apply has no host mutation
 
 - GIVEN `dbootstrap apply` runs successfully
 - WHEN the command completes
 - THEN no filesystem or host state is mutated
+- AND no dotfiles command runner is used
 
 #### Scenario: Dry-run apply has no host mutation
 
 - GIVEN `dbootstrap apply --dry-run` runs successfully
 - WHEN the command completes
 - THEN no filesystem or host state is mutated
+- AND no dotfiles command runner is used
 
-#### Scenario: No acquisition or orchestration features are introduced outside confirmed eligible execution
+#### Scenario: No orchestration acquisition features are introduced
 
-- GIVEN `dbootstrap apply` runs in default mode, dry-run mode, or confirmed mode for selected dotfile resources
+- GIVEN `dbootstrap apply --yes` runs for selected dotfile resources
 - WHEN the execution path is reviewed
 - THEN no retry, clone, pull, submodule, fetch, remote acquisition, sparse checkout, or apt behavior is present
-- AND dotlink may be requested only for confirmed selected dotfile resources through the configured command runner
 
 ### Requirement: Apply mode is explicit and safe by default
 
@@ -179,17 +125,6 @@ The command MUST keep Homebrew bootstrap reporting non-mutating in default and `
 - WHEN the command executes
 - THEN the selected mode is reported as confirmed mode
 - AND real execution may be attempted only for those eligible steps
-
-### Requirement: Conflicting safety flags are rejected
-
-The `apply` command MUST reject `--dry-run --yes` as invalid input and MUST return a clear usage error.
-
-#### Scenario: Dry-run and yes cannot be combined
-
-- GIVEN the user runs `dbootstrap apply --dry-run --yes`
-- WHEN the command validates flags
-- THEN the command fails with a usage error
-- AND no execution result is produced
 
 ### Requirement: Confirmed mode only wires eligible real execution
 
@@ -223,32 +158,10 @@ Dotfile execution MUST use the existing dotfiles execution provider and MUST run
 - THEN the dotfile step is reported as failed with understandable text
 - AND no real command is invoked
 
-### Requirement: Confirmed apply exits non-zero when eligible execution fails
-
-When `apply --yes` attempts eligible real execution and any eligible step reports `failed`, the CLI MUST return a non-zero exit status after rendering the execution report.
-This includes dotfiles failures caused by missing base path, missing `bin/dotlink`, missing selected module, command-runner failure, or command timeout.
-Default apply and `--dry-run` MUST remain non-mutating and MUST NOT use this rule to imply real execution was attempted.
-
-#### Scenario: Missing dotfiles prerequisite makes confirmed apply fail
-
-- GIVEN a selected dotfile resource is eligible under `apply --yes`
-- AND the dotfiles base path, dotlink executable, or selected module is missing
-- WHEN apply renders the execution report
-- THEN the dotfile step is reported as failed
-- AND the CLI exits non-zero
-
-#### Scenario: Dotlink runner failure makes confirmed apply fail
-
-- GIVEN a selected dotfile resource is eligible under `apply --yes`
-- AND the injected command runner reports failure or timeout
-- WHEN apply renders the execution report
-- THEN the dotfile step is reported as failed
-- AND the CLI exits non-zero
-- AND no retry or fallback acquisition is attempted
 
 ## REMOVED Requirements
 
-### Requirement: No apply command is introduced
+### Requirement: None
 
-(Reason: `apply` is now intentionally added as a functional CLI bridge: default and `--dry-run` stay non-mutating, while `--yes` may run the narrow confirmed Homebrew path.)
-(Migration: Replace this gate with functional `apply` coverage.)
+(Reason: This change narrows and extends confirmed apply behavior without removing the existing apply safety model.)
+(Migration: None.)

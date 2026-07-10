@@ -36,6 +36,10 @@ func NewLocalDotfilesProvider(runner CommandRunner, resolver DotfilesBaseResolve
 	return &LocalDotfilesProvider{Runner: runner, Resolver: resolver, Timeout: DefaultDotlinkTimeout}
 }
 
+func (p *LocalDotfilesProvider) DotfilesBase() (ResolvedDotfilesBase, error) {
+	return p.resolvedBase()
+}
+
 func (p *LocalDotfilesProvider) EnsureModules(_ context.Context, modules []string) error {
 	base, err := p.resolvedBase()
 	if err != nil {

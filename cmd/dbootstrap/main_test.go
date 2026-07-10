@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -424,7 +425,7 @@ func TestRunUsageErrors(t *testing.T) {
 				"\n" +
 				"Commands:\n" +
 				"  plan    Build a deterministic plan for a profile\n" +
-				"  apply   Execute the plan safely; only --yes may run brew-backed installs\n" +
+				"  apply   Execute the plan safely; only --yes may run brew-backed installs and selected dotfiles\n" +
 				"error: command is required\n",
 		},
 		{
@@ -434,7 +435,7 @@ func TestRunUsageErrors(t *testing.T) {
 				"\n" +
 				"Commands:\n" +
 				"  plan    Build a deterministic plan for a profile\n" +
-				"  apply   Execute the plan safely; only --yes may run brew-backed installs\n" +
+				"  apply   Execute the plan safely; only --yes may run brew-backed installs and selected dotfiles\n" +
 				"error: unknown command \"deploy\"\n",
 		},
 	}
@@ -557,7 +558,7 @@ func TestRunApplyCommand(t *testing.T) {
 			wantCode:          exitSuccess,
 			wantStdout: "Execution Report\n" +
 				"Mode: confirmed\n" +
-				"Confirmed mode: only brew-backed tool/package steps may have changed this machine; runtime, dotfile, non-brew, and unsupported steps remain non-mutating or not supported yet.\n" +
+				"Confirmed mode: brew-backed tool/package steps and selected dotfile resources may have changed this machine; runtime, non-brew, unselected, and unsupported steps remain non-mutating or not supported yet.\n" +
 				"\n" +
 				"Summary:\n" +
 				"- changed: 0\n" +
@@ -723,7 +724,7 @@ resources = ["tool:fd"]
 			wantContains: []string{
 				"Execution Report",
 				"Mode: confirmed",
-				"Confirmed mode: only brew-backed tool/package steps may have changed this machine",
+				"Confirmed mode: brew-backed tool/package steps and selected dotfile resources may have changed this machine",
 				"tool:fd [unchanged]",
 				"Manual Actions:",
 				"homebrew:bootstrap: Install Homebrew",
@@ -792,14 +793,19 @@ description = "Fast find alternative"
 provider = "brew"
 package = "fd"
 
+[[dotfiles]]
+id = "bash"
+description = "Bash dotfiles"
+
 [[profiles]]
 id = "dev"
-resources = ["tool:fd"]
+resources = ["tool:fd", "dotfile:bash"]
 `)
 
 	for _, args := range [][]string{
 		{"apply", "--profile", "dev", "--catalog", catalogPath},
 		{"apply", "--profile", "dev", "--catalog", catalogPath, "--dry-run"},
+		{"plan", "--resource", "dotfile:bash", "--catalog", catalogPath},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
@@ -816,6 +822,10 @@ resources = ["tool:fd"]
 					t.Fatal("safe modes must not instantiate Homebrew installers")
 					return nil
 				},
+				func(execution.CommandRunner) execution.Installer {
+					t.Fatal("safe modes and plan must not instantiate dotfiles installers")
+					return nil
+				},
 			)
 
 			var stdout bytes.Buffer
@@ -827,6 +837,9 @@ resources = ["tool:fd"]
 			}
 			if strings.Contains(stdout.String(), "installed fd") {
 				t.Fatalf("safe mode output reported install: %q", stdout.String())
+			}
+			if args[0] == "apply" && !strings.Contains(stdout.String(), "dotfile:bash [not supported yet]") {
+				t.Fatalf("safe apply did not keep dotfile resource not supported: %q", stdout.String())
 			}
 			if stderr.String() != "" {
 				t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -876,6 +889,10 @@ resources = ["tool:fd", "package:ripgrep", "runtime:go"]
 		func(kind planning.ResourceKind, commandRunner execution.CommandRunner, exists execution.CommandExists) execution.Installer {
 			return execution.NewHomebrewInstaller(kind, commandRunner, exists)
 		},
+		func(execution.CommandRunner) execution.Installer {
+			t.Fatal("brew-only apply must not instantiate dotfiles installer")
+			return nil
+		},
 	)
 
 	var stdout bytes.Buffer
@@ -908,6 +925,184 @@ resources = ["tool:fd", "package:ripgrep", "runtime:go"]
 	}
 }
 
+func TestRunApplyConfirmedDotfilesUsesInjectedRunner(t *testing.T) {
+	base := makeDotfilesBase(t, "bash")
+	catalogPath := writeDotfilesCatalog(t, "bash", "git")
+	stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+	stubInstallationState(t, planning.InstallationState{})
+	stubConfigState(t, planning.ConfigState{})
+	stubDotfilesState(t, planning.InstallationState{})
+	stubBrewCommandExists(t, true)
+	runner := &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded, ExitCode: 0}}
+	stubExecutionFactories(t,
+		func() execution.CommandRunner { return runner },
+		func(kind planning.ResourceKind, commandRunner execution.CommandRunner, exists execution.CommandExists) execution.Installer {
+			return execution.NewHomebrewInstaller(kind, commandRunner, exists)
+		},
+		func(commandRunner execution.CommandRunner) execution.Installer {
+			provider := execution.NewLocalDotfilesProvider(commandRunner, execution.DotfilesBaseResolver{
+				LookupEnv: func(string) (string, bool) { return base, true },
+				HomeDir:   func() (string, error) { return filepath.Dir(base), nil },
+			})
+			return execution.NewDotfilesInstaller(provider)
+		},
+	)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	gotCode := run([]string{"apply", "--yes", "--resource", "dotfile:bash", "--catalog", catalogPath}, &stdout, &stderr)
+
+	if gotCode != exitSuccess {
+		t.Fatalf("run() exit code = %d, want %d", gotCode, exitSuccess)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("command runner calls = %d, want 1", len(runner.calls))
+	}
+	call := runner.calls[0]
+	if call.Executable != filepath.Join(base, "bin", "dotlink") || strings.Join(call.Args, " ") != "link bash" || call.Dir != base {
+		t.Fatalf("CommandRequest = %#v, want dotlink for bash only", call)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"Mode: confirmed",
+		"Confirmed mode: brew-backed tool/package steps and selected dotfile resources may have changed this machine",
+		"dotfile:bash [changed] installed dotfile module bash",
+		"dotfiles base: " + base,
+		"source: env",
+		"modules: bash",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout missing %q; got %q", want, out)
+		}
+	}
+	if strings.Contains(out, "git") {
+		t.Fatalf("stdout mentioned unselected module/resource: %q", out)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunApplyConfirmedDotfilesFailuresExitNonZero(t *testing.T) {
+	tests := []struct {
+		name        string
+		module      string
+		baseSetup   func(t *testing.T) string
+		runner      *recordingCommandRunner
+		wantMessage string
+	}{
+		{
+			name:        "missing base",
+			module:      "bash",
+			baseSetup:   func(t *testing.T) string { return filepath.Join(t.TempDir(), "missing-dotfiles") },
+			runner:      &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded, ExitCode: 0}},
+			wantMessage: "resolve dotfiles base",
+		},
+		{
+			name:   "missing dotlink",
+			module: "bash",
+			baseSetup: func(t *testing.T) string {
+				base := makeDotfilesBase(t, "bash")
+				if err := os.Remove(filepath.Join(base, "bin", "dotlink")); err != nil {
+					t.Fatalf("remove dotlink: %v", err)
+				}
+				return base
+			},
+			runner:      &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded, ExitCode: 0}},
+			wantMessage: "validate dotlink",
+		},
+		{
+			name:        "missing module",
+			module:      "zsh",
+			baseSetup:   func(t *testing.T) string { return makeDotfilesBase(t, "bash") },
+			runner:      &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded, ExitCode: 0}},
+			wantMessage: "validate module \"zsh\"",
+		},
+		{
+			name:      "runner failure",
+			module:    "bash",
+			baseSetup: func(t *testing.T) string { return makeDotfilesBase(t, "bash") },
+			runner: &recordingCommandRunner{result: execution.CommandResult{
+				Status:   execution.CommandStatusFailed,
+				ExitCode: 42,
+				Err:      errors.New("dotlink failed"),
+			}},
+			wantMessage: "dotfile module bash failed",
+		},
+		{
+			name:      "runner timeout",
+			module:    "bash",
+			baseSetup: func(t *testing.T) string { return makeDotfilesBase(t, "bash") },
+			runner: &recordingCommandRunner{result: execution.CommandResult{
+				Status: execution.CommandStatusTimedOut,
+				Err:    context.DeadlineExceeded,
+			}},
+			wantMessage: "dotfile module bash failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := tt.baseSetup(t)
+			catalogPath := writeDotfilesCatalog(t, tt.module)
+			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+			stubInstallationState(t, planning.InstallationState{})
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+			stubBrewCommandExists(t, false)
+			stubExecutionFactories(t,
+				func() execution.CommandRunner { return tt.runner },
+				func(planning.ResourceKind, execution.CommandRunner, execution.CommandExists) execution.Installer {
+					t.Fatal("dotfiles-only apply must not instantiate Homebrew installers")
+					return nil
+				},
+				func(commandRunner execution.CommandRunner) execution.Installer {
+					provider := execution.NewLocalDotfilesProvider(commandRunner, execution.DotfilesBaseResolver{
+						LookupEnv: func(string) (string, bool) { return base, true },
+						HomeDir:   func() (string, error) { return filepath.Dir(base), nil },
+					})
+					return execution.NewDotfilesInstaller(provider)
+				},
+			)
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			gotCode := run([]string{"apply", "--yes", "--resource", "dotfile:" + tt.module, "--catalog", catalogPath}, &stdout, &stderr)
+
+			if gotCode != exitFailure {
+				t.Fatalf("run() exit code = %d, want %d", gotCode, exitFailure)
+			}
+			out := stdout.String()
+			for _, want := range []string{"[failed]", tt.wantMessage, "- failed: 1"} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("stdout missing %q; got %q", want, out)
+				}
+			}
+			if strings.Contains(out, "[changed]") {
+				t.Fatalf("failed result reported changed: %q", out)
+			}
+			if tt.name == "missing base" || tt.name == "missing dotlink" || tt.name == "missing module" {
+				if len(tt.runner.calls) != 0 {
+					t.Fatalf("command runner calls = %d, want none", len(tt.runner.calls))
+				}
+			} else if len(tt.runner.calls) != 1 {
+				t.Fatalf("command runner calls = %d, want one dotlink attempt", len(tt.runner.calls))
+			}
+			for _, call := range tt.runner.calls {
+				request := call.Executable + " " + strings.Join(call.Args, " ")
+				for _, forbidden := range []string{"clone", "pull", "submodule", "fetch", "remote", "sparse", "apt"} {
+					if strings.Contains(request, forbidden) {
+						t.Fatalf("dotfiles path requested forbidden command %q in %#v", forbidden, call)
+					}
+				}
+			}
+			if stderr.String() != "" {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
 func TestRunApplyConfirmedMissingBrewDoesNotInstantiateHomebrewInstaller(t *testing.T) {
 	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `
 schema = "dniebles.catalog"
@@ -936,6 +1131,10 @@ resources = ["package:ripgrep"]
 		},
 		func(planning.ResourceKind, execution.CommandRunner, execution.CommandExists) execution.Installer {
 			t.Fatal("missing brew must not instantiate Homebrew installer")
+			return nil
+		},
+		func(execution.CommandRunner) execution.Installer {
+			t.Fatal("brew-only apply must not instantiate dotfiles installer")
 			return nil
 		},
 	)
@@ -971,6 +1170,44 @@ func TestRunApplyCatalogLoadErrors(t *testing.T) {
 	if !strings.Contains(stderr.String(), "error: load catalog ") || !strings.Contains(stderr.String(), "no such file or directory") {
 		t.Fatalf("stderr = %q, want load error", stderr.String())
 	}
+}
+
+func writeDotfilesCatalog(t *testing.T, modules ...string) string {
+	t.Helper()
+	var catalog strings.Builder
+	catalog.WriteString("schema = \"dniebles.catalog\"\nversion = 1\n\n")
+	refs := make([]string, 0, len(modules))
+	for _, module := range modules {
+		catalog.WriteString("[[dotfiles]]\n")
+		catalog.WriteString("id = \"")
+		catalog.WriteString(module)
+		catalog.WriteString("\"\n")
+		catalog.WriteString("description = \"")
+		catalog.WriteString(module)
+		catalog.WriteString(" dotfiles\"\n\n")
+		refs = append(refs, "\"dotfile:"+module+"\"")
+	}
+	catalog.WriteString("[[profiles]]\nid = \"dev\"\nresources = [")
+	catalog.WriteString(strings.Join(refs, ", "))
+	catalog.WriteString("]\n")
+	return writeFile(t, t.TempDir(), "catalog.toml", catalog.String())
+}
+
+func makeDotfilesBase(t *testing.T, modules ...string) string {
+	t.Helper()
+	base := filepath.Join(t.TempDir(), "home", ".dotfiles")
+	if err := os.MkdirAll(filepath.Join(base, "bin"), 0o700); err != nil {
+		t.Fatalf("create dotfiles bin: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "bin", "dotlink"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatalf("write dotlink: %v", err)
+	}
+	for _, module := range modules {
+		if err := os.MkdirAll(filepath.Join(base, module), 0o700); err != nil {
+			t.Fatalf("create module %s: %v", module, err)
+		}
+	}
+	return base
 }
 
 func writeFile(t *testing.T, dir, name, content string) string {
@@ -1026,15 +1263,19 @@ func stubExecutionFactories(
 	t *testing.T,
 	runnerFactory func() execution.CommandRunner,
 	installerFactory func(planning.ResourceKind, execution.CommandRunner, execution.CommandExists) execution.Installer,
+	dotfilesInstallerFactory func(execution.CommandRunner) execution.Installer,
 ) {
 	t.Helper()
 	originalRunnerFactory := newOSCommandRunner
 	originalInstallerFactory := newHomebrewInstaller
+	originalDotfilesInstallerFactory := newDotfilesInstaller
 	newOSCommandRunner = runnerFactory
 	newHomebrewInstaller = installerFactory
+	newDotfilesInstaller = dotfilesInstallerFactory
 	t.Cleanup(func() {
 		newOSCommandRunner = originalRunnerFactory
 		newHomebrewInstaller = originalInstallerFactory
+		newDotfilesInstaller = originalDotfilesInstallerFactory
 	})
 }
 

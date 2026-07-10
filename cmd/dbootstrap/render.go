@@ -55,7 +55,7 @@ func renderExecutionReport(w io.Writer, mode applyMode, report execution.Executi
 	fmt.Fprintln(w, "Execution Report")
 	fmt.Fprintf(w, "Mode: %s\n", mode)
 	if mode == applyModeConfirmed {
-		fmt.Fprintln(w, "Confirmed mode: only brew-backed tool/package steps may have changed this machine; runtime, dotfile, non-brew, and unsupported steps remain non-mutating or not supported yet.")
+		fmt.Fprintln(w, "Confirmed mode: brew-backed tool/package steps and selected dotfile resources may have changed this machine; runtime, non-brew, unselected, and unsupported steps remain non-mutating or not supported yet.")
 	}
 	fmt.Fprintln(w)
 

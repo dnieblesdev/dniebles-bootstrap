@@ -190,7 +190,7 @@ func TestRenderExecutionReportFramesConfirmedModeMutability(t *testing.T) {
 
 	got := stdout.String()
 	for _, want := range []string{
-		"Confirmed mode: only brew-backed tool/package steps may have changed this machine",
+		"Confirmed mode: brew-backed tool/package steps and selected dotfile resources may have changed this machine",
 		"unsupported steps remain non-mutating or not supported yet",
 	} {
 		if !bytes.Contains([]byte(got), []byte(want)) {
