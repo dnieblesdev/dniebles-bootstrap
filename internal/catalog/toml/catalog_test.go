@@ -262,7 +262,7 @@ func TestLoadFileAndBuildPlanFromFixture(t *testing.T) {
 			"dev": {Name: "dev", Bundles: []string{"cli"}, Resources: []planning.ResourceRef{runtimeGo}},
 		},
 		Bundles: map[string]planning.Bundle{
-			"cli": {Name: "cli", Resources: []planning.ResourceRef{toolGit, packageRipgrep}},
+			"cli": {Name: "cli", Resources: []planning.ResourceRef{toolGit, packageRipgrep, packageJq}},
 		},
 		Resources: map[planning.ResourceRef]planning.Resource{
 			toolGit: {
@@ -289,6 +289,13 @@ func TestLoadFileAndBuildPlanFromFixture(t *testing.T) {
 				Install:     &planning.InstallMetadata{Provider: "brew", Package: "ripgrep"},
 				Presence:    &planning.PresenceMetadata{Kind: "command_exists", Name: "rg"},
 			},
+			packageJq: {
+				Ref:         packageJq,
+				Description: "JSON processor",
+				DependsOn:   []planning.ResourceRef{toolGit},
+				Install:     &planning.InstallMetadata{Provider: "brew", Package: "jq"},
+				Presence:    &planning.PresenceMetadata{Kind: "command_exists", Name: "jq"},
+			},
 			dotBash: {
 				Ref:         dotBash,
 				Description: "Bash dotfiles",
@@ -308,11 +315,12 @@ func TestLoadFileAndBuildPlanFromFixture(t *testing.T) {
 		planning.InstallationState{},
 	)
 
-	wantSteps := []planning.ResourceRef{toolGit, packageRipgrep, runtimeGo}
+	wantSteps := []planning.ResourceRef{toolGit, packageJq, packageRipgrep, runtimeGo}
 	if got := refsFromSteps(result.Plan.Steps); !reflect.DeepEqual(got, wantSteps) {
 		t.Fatalf("planned steps = %#v, want %#v", got, wantSteps)
 	}
 	assertStatus(t, result, toolGit, planning.PlanStepStatusPlanned)
+	assertStatus(t, result, packageJq, planning.PlanStepStatusPlanned)
 	assertStatus(t, result, packageRipgrep, planning.PlanStepStatusPlanned)
 	assertStatus(t, result, runtimeGo, planning.PlanStepStatusPlanned)
 
@@ -330,6 +338,13 @@ func TestLoadFileAndBuildPlanFromFixture(t *testing.T) {
 				t.Fatalf("package install metadata = %#v, want %#v", got, want)
 			}
 			if got, want := step.Resource.Presence, (&planning.PresenceMetadata{Kind: "command_exists", Name: "rg"}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("package presence metadata = %#v, want %#v", got, want)
+			}
+		case packageJq:
+			if got, want := step.Resource.Install, (&planning.InstallMetadata{Provider: "brew", Package: "jq"}); !reflect.DeepEqual(got, want) {
+				t.Fatalf("package install metadata = %#v, want %#v", got, want)
+			}
+			if got, want := step.Resource.Presence, (&planning.PresenceMetadata{Kind: "command_exists", Name: "jq"}); !reflect.DeepEqual(got, want) {
 				t.Fatalf("package presence metadata = %#v, want %#v", got, want)
 			}
 		case runtimeGo:
@@ -416,6 +431,7 @@ var (
 	toolGit        = planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "git"}
 	runtimeGo      = planning.ResourceRef{Kind: planning.ResourceKindRuntime, Name: "go"}
 	packageRipgrep = planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "ripgrep"}
+	packageJq      = planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "jq"}
 	dotBash        = planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "bash"}
 )
 

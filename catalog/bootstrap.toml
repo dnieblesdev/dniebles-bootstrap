@@ -37,13 +37,24 @@ package = "ripgrep"
 kind = "command_exists"
 name = "rg"
 
+[[packages]]
+id = "jq"
+description = "JSON processor"
+depends_on = ["tool:git"]
+[packages.install]
+provider = "brew"
+package = "jq"
+[packages.presence]
+kind = "command_exists"
+name = "jq"
+
 [[dotfiles]]
 id = "bash"
 description = "Bash dotfiles"
 
 [[bundles]]
 id = "cli"
-resources = ["tool:git", "package:ripgrep"]
+resources = ["tool:git", "package:ripgrep", "package:jq"]
 
 [[profiles]]
 id = "dev"

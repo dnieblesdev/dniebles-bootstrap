@@ -47,14 +47,18 @@ func TestRunPlanCommand(t *testing.T) {
 				"1. tool:git [planned] Version control\n" +
 				"   depends_on: none\n" +
 				"   attention: none\n" +
-				"2. package:ripgrep [planned] Fast text search\n" +
+				"2. package:jq [planned] JSON processor\n" +
 				"   depends_on: tool:git\n" +
 				"   attention: none\n" +
-				"3. runtime:go [attention_required] Go toolchain\n" +
+				"3. package:ripgrep [planned] Fast text search\n" +
+				"   depends_on: tool:git\n" +
+				"   attention: none\n" +
+				"4. runtime:go [attention_required] Go toolchain\n" +
 				"   depends_on: tool:git\n" +
 				"   attention: missing required config \"go.env\"\n" +
 				"\n" +
 				"Results:\n" +
+				"- package:jq: planned\n" +
 				"- package:ripgrep: planned\n" +
 				"- runtime:go: attention_required\n" +
 				"  reason: missing required config \"go.env\"\n" +
@@ -79,14 +83,18 @@ func TestRunPlanCommand(t *testing.T) {
 				"1. tool:git [already_installed] Version control\n" +
 				"   depends_on: none\n" +
 				"   attention: none\n" +
-				"2. package:ripgrep [planned] Fast text search\n" +
+				"2. package:jq [planned] JSON processor\n" +
 				"   depends_on: tool:git\n" +
 				"   attention: none\n" +
-				"3. runtime:go [attention_required] Go toolchain\n" +
+				"3. package:ripgrep [planned] Fast text search\n" +
+				"   depends_on: tool:git\n" +
+				"   attention: none\n" +
+				"4. runtime:go [attention_required] Go toolchain\n" +
 				"   depends_on: tool:git\n" +
 				"   attention: missing required config \"go.env\"\n" +
 				"\n" +
 				"Results:\n" +
+				"- package:jq: planned\n" +
 				"- package:ripgrep: planned\n" +
 				"- runtime:go: attention_required\n" +
 				"  reason: missing required config \"go.env\"\n" +
@@ -109,14 +117,18 @@ func TestRunPlanCommand(t *testing.T) {
 				"1. tool:git [planned] Version control\n" +
 				"   depends_on: none\n" +
 				"   attention: none\n" +
-				"2. package:ripgrep [planned] Fast text search\n" +
+				"2. package:jq [planned] JSON processor\n" +
 				"   depends_on: tool:git\n" +
 				"   attention: none\n" +
-				"3. runtime:go [planned] Go toolchain\n" +
+				"3. package:ripgrep [planned] Fast text search\n" +
+				"   depends_on: tool:git\n" +
+				"   attention: none\n" +
+				"4. runtime:go [planned] Go toolchain\n" +
 				"   depends_on: tool:git\n" +
 				"   attention: none\n" +
 				"\n" +
 				"Results:\n" +
+				"- package:jq: planned\n" +
 				"- package:ripgrep: planned\n" +
 				"- runtime:go: planned\n" +
 				"- tool:git: planned\n",
@@ -166,15 +178,19 @@ func TestRunPlanCommand(t *testing.T) {
 				"2. tool:git [planned] Version control\n" +
 				"   depends_on: none\n" +
 				"   attention: none\n" +
-				"3. package:ripgrep [planned] Fast text search\n" +
+				"3. package:jq [planned] JSON processor\n" +
 				"   depends_on: tool:git\n" +
 				"   attention: none\n" +
-				"4. runtime:go [attention_required] Go toolchain\n" +
+				"4. package:ripgrep [planned] Fast text search\n" +
+				"   depends_on: tool:git\n" +
+				"   attention: none\n" +
+				"5. runtime:go [attention_required] Go toolchain\n" +
 				"   depends_on: tool:git\n" +
 				"   attention: missing required config \"go.env\"\n" +
 				"\n" +
 				"Results:\n" +
 				"- dotfile:bash: planned\n" +
+				"- package:jq: planned\n" +
 				"- package:ripgrep: planned\n" +
 				"- runtime:go: attention_required\n" +
 				"  reason: missing required config \"go.env\"\n" +
@@ -514,13 +530,14 @@ func TestRunApplyCommand(t *testing.T) {
 				"Summary:\n" +
 				"- changed: 0\n" +
 				"- unchanged: 0\n" +
-				"- not supported yet: 3\n" +
+				"- not supported yet: 4\n" +
 				"- failed: 0\n" +
 				"\n" +
 				"Steps:\n" +
 				"1. tool:git [not supported yet] noop installer does not perform real installation\n" +
-				"2. package:ripgrep [not supported yet] noop installer does not perform real installation\n" +
-				"3. runtime:go [not supported yet] noop installer does not perform real installation\n" +
+				"2. package:jq [not supported yet] noop installer does not perform real installation\n" +
+				"3. package:ripgrep [not supported yet] noop installer does not perform real installation\n" +
+				"4. runtime:go [not supported yet] noop installer does not perform real installation\n" +
 				"\n" +
 				"Manual Actions:\n" +
 				homebrewManualActionOutput,
@@ -538,13 +555,14 @@ func TestRunApplyCommand(t *testing.T) {
 				"Summary:\n" +
 				"- changed: 0\n" +
 				"- unchanged: 0\n" +
-				"- not supported yet: 3\n" +
+				"- not supported yet: 4\n" +
 				"- failed: 0\n" +
 				"\n" +
 				"Steps:\n" +
 				"1. tool:git [not supported yet] noop installer does not perform real installation\n" +
-				"2. package:ripgrep [not supported yet] noop installer does not perform real installation\n" +
-				"3. runtime:go [not supported yet] noop installer does not perform real installation\n" +
+				"2. package:jq [not supported yet] noop installer does not perform real installation\n" +
+				"3. package:ripgrep [not supported yet] noop installer does not perform real installation\n" +
+				"4. runtime:go [not supported yet] noop installer does not perform real installation\n" +
 				"\n" +
 				"Manual Actions:\n" +
 				homebrewManualActionOutput,
@@ -562,14 +580,15 @@ func TestRunApplyCommand(t *testing.T) {
 				"\n" +
 				"Summary:\n" +
 				"- changed: 0\n" +
-				"- unchanged: 2\n" +
+				"- unchanged: 3\n" +
 				"- not supported yet: 1\n" +
 				"- failed: 0\n" +
 				"\n" +
 				"Steps:\n" +
 				"1. tool:git [unchanged] skipped because Homebrew must be installed manually before brew-backed resources can be applied\n" +
-				"2. package:ripgrep [unchanged] skipped because Homebrew must be installed manually before brew-backed resources can be applied\n" +
-				"3. runtime:go [not supported yet] noop installer does not perform real installation\n" +
+				"2. package:jq [unchanged] skipped because Homebrew must be installed manually before brew-backed resources can be applied\n" +
+				"3. package:ripgrep [unchanged] skipped because Homebrew must be installed manually before brew-backed resources can be applied\n" +
+				"4. runtime:go [not supported yet] noop installer does not perform real installation\n" +
 				"\n" +
 				"Manual Actions:\n" +
 				homebrewManualActionOutput,
