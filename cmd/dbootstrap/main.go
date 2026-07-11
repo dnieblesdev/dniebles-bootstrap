@@ -32,6 +32,7 @@ const (
 	applyModeDefaultNonMutating applyMode = "default-non-mutating"
 	applyModeDryRun             applyMode = "dry-run"
 	applyModeConfirmed          applyMode = "confirmed"
+	applyModeConfirmedSudo      applyMode = "confirmed-sudo"
 )
 
 var (
@@ -40,9 +41,13 @@ var (
 	detectConfigState       = config.Detect
 	detectDotfilesState     = dotfiles.Detect
 	brewCommandExists       = execution.BrewCommandExists
+	aptCommandExists        = execution.BrewCommandExists
 	newOSCommandRunner      = func() execution.CommandRunner { return execution.NewOSCommandRunner() }
 	newHomebrewInstaller    = func(kind planning.ResourceKind, runner execution.CommandRunner, exists execution.CommandExists) execution.Installer {
 		return execution.NewHomebrewInstaller(kind, runner, exists)
+	}
+	newAptInstaller = func(kind planning.ResourceKind, runner execution.CommandRunner, exists execution.CommandExists, sudo bool) execution.Installer {
+		return execution.NewAptInstaller(kind, runner, exists, sudo)
 	}
 	newDotfilesInstaller = func(runner execution.CommandRunner) execution.Installer {
 		provider := execution.NewLocalDotfilesProvider(runner, execution.DotfilesBaseResolver{})
@@ -125,24 +130,25 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
-	runner := buildApplyRunner(mode, result.Plan)
+	runner := buildApplyRunner(mode, facts, result.Plan)
 	report := runner.Run(context.Background(), result.Plan)
 	report = appendApplyBootstrap(report, result.Plan)
 	renderExecutionReport(stdout, mode, report)
-	if mode == applyModeConfirmed && hasFailedExecutionResult(report) {
+	if isConfirmedMode(mode) && hasFailedExecutionResult(report) {
 		return exitFailure
 	}
 	return exitSuccess
 }
 
-func buildApplyRunner(mode applyMode, plan planning.Plan) *execution.Runner {
-	if mode != applyModeConfirmed {
+func buildApplyRunner(mode applyMode, facts planning.EnvironmentFacts, plan planning.Plan) *execution.Runner {
+	if !isConfirmedMode(mode) {
 		return newNoopApplyRunner()
 	}
 
 	hasBrew := planHasBrewBackedInstall(plan)
+	hasApt := planHasAptBackedInstall(plan)
 	hasDotfiles := planHasDotfileSteps(plan)
-	if !hasBrew && !hasDotfiles {
+	if !hasBrew && !hasApt && !hasDotfiles {
 		return newProviderAwareNoopRunner()
 	}
 
@@ -154,17 +160,28 @@ func buildApplyRunner(mode applyMode, plan planning.Plan) *execution.Runner {
 		return runner
 	}
 
-	toolInstaller := execution.BrewOnlyInstaller(planning.ResourceKindTool, nil)
-	packageInstaller := execution.BrewOnlyInstaller(planning.ResourceKindPackage, nil)
+	var brewTool, brewPackage execution.Installer
 	if hasBrew {
 		if brewCommandExists("brew") {
-			toolInstaller = execution.BrewOnlyInstaller(planning.ResourceKindTool, newHomebrewInstaller(planning.ResourceKindTool, commandRunner(), brewCommandExists))
-			packageInstaller = execution.BrewOnlyInstaller(planning.ResourceKindPackage, newHomebrewInstaller(planning.ResourceKindPackage, commandRunner(), brewCommandExists))
+			brewTool = newHomebrewInstaller(planning.ResourceKindTool, commandRunner(), brewCommandExists)
+			brewPackage = newHomebrewInstaller(planning.ResourceKindPackage, commandRunner(), brewCommandExists)
 		} else {
-			toolInstaller = execution.BrewOnlyInstaller(planning.ResourceKindTool, missingHomebrewInstaller{kind: planning.ResourceKindTool})
-			packageInstaller = execution.BrewOnlyInstaller(planning.ResourceKindPackage, missingHomebrewInstaller{kind: planning.ResourceKindPackage})
+			brewTool = missingHomebrewInstaller{kind: planning.ResourceKindTool}
+			brewPackage = missingHomebrewInstaller{kind: planning.ResourceKindPackage}
 		}
 	}
+	var toolApt, packageApt execution.Installer
+	if hasApt {
+		if facts.OS == "linux" {
+			toolApt = newAptInstaller(planning.ResourceKindTool, commandRunner(), aptCommandExists, mode == applyModeConfirmedSudo)
+			packageApt = newAptInstaller(planning.ResourceKindPackage, commandRunner(), aptCommandExists, mode == applyModeConfirmedSudo)
+		} else {
+			toolApt = execution.NewNonLinuxAptInstaller(planning.ResourceKindTool, facts.OS)
+			packageApt = execution.NewNonLinuxAptInstaller(planning.ResourceKindPackage, facts.OS)
+		}
+	}
+	toolInstaller := execution.BrewOrAptInstaller(planning.ResourceKindTool, brewTool, toolApt)
+	packageInstaller := execution.BrewOrAptInstaller(planning.ResourceKindPackage, brewPackage, packageApt)
 	dotfilesInstaller := execution.NoopForKind(planning.ResourceKindDotfile)
 	if hasDotfiles {
 		dotfilesInstaller = newDotfilesInstaller(commandRunner())
@@ -184,6 +201,19 @@ func newProviderAwareNoopRunner() *execution.Runner {
 		execution.BrewOnlyInstaller(planning.ResourceKindPackage, nil),
 		execution.NoopForKind(planning.ResourceKindDotfile),
 	)
+}
+
+func planHasAptBackedInstall(plan planning.Plan) bool {
+	for _, step := range plan.Steps {
+		if step.Resource.Install != nil && step.Resource.Install.Provider == "apt" {
+			return true
+		}
+	}
+	return false
+}
+
+func isConfirmedMode(mode applyMode) bool {
+	return mode == applyModeConfirmed || mode == applyModeConfirmedSudo
 }
 
 func newNoopApplyRunner() *execution.Runner {
@@ -259,7 +289,8 @@ func parseApplyFlags(args []string, stderr io.Writer) (planning.PlanRequest, str
 	flags.Var(&resources, "resource", "resource target as kind:name (may be repeated)")
 	catalogPath := flags.String("catalog", defaultCatalogPath, "catalog TOML file path")
 	dryRun := flags.Bool("dry-run", false, "run in non-mutating dry-run mode")
-	yes := flags.Bool("yes", false, "confirmed mode; may run real brew installs and selected dotfiles")
+	yes := flags.Bool("yes", false, "confirmed mode; may run eligible Homebrew, Linux APT, and selected dotfile work")
+	sudo := flags.Bool("sudo", false, "use sudo for confirmed APT installation")
 
 	if err := flags.Parse(args); err != nil {
 		printApplyUsage(stderr)
@@ -274,6 +305,11 @@ func parseApplyFlags(args []string, stderr io.Writer) (planning.PlanRequest, str
 	if *dryRun && *yes {
 		printApplyUsage(stderr)
 		fmt.Fprintln(stderr, "error: --dry-run and --yes cannot be combined")
+		return planning.PlanRequest{}, "", "", false
+	}
+	if *sudo && !*yes {
+		printApplyUsage(stderr)
+		fmt.Fprintln(stderr, "error: --sudo requires --yes")
 		return planning.PlanRequest{}, "", "", false
 	}
 
@@ -296,6 +332,9 @@ func parseApplyFlags(args []string, stderr io.Writer) (planning.PlanRequest, str
 		mode = applyModeDryRun
 	} else if *yes {
 		mode = applyModeConfirmed
+		if *sudo {
+			mode = applyModeConfirmedSudo
+		}
 	}
 
 	return planning.PlanRequest{Profile: *profile, Resources: resourceRefs}, *catalogPath, mode, true
@@ -393,7 +432,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  plan    Build a deterministic plan for a profile")
-	fmt.Fprintln(w, "  apply   Execute the plan safely; only --yes may run brew-backed installs and selected dotfiles")
+	fmt.Fprintln(w, "  apply   Execute safely; --yes may run eligible brew-backed installs, eligible Linux APT installs, and selected dotfiles")
+	fmt.Fprintln(w, "          APT uses apt-get directly with --yes, or sudo apt-get only with --yes --sudo")
 }
 
 func printCommandUsage(command string, w io.Writer) {
@@ -410,7 +450,7 @@ func printPlanUsage(w io.Writer) {
 }
 
 func printApplyUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes]")
+	fmt.Fprintln(w, "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo]]")
 }
 
 func parseResourceRef(value string) (planning.ResourceRef, error) {

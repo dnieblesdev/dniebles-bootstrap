@@ -73,7 +73,7 @@ It MUST remain separate from the read-only dotfiles detector and MUST NOT own pl
 ### Requirement: Execution contracts remain non-mutating for apply
 
 `internal/execution` MUST remain a safe, non-mutating boundary used by `apply`.
-The command MUST use noop execution contracts by default and in `--dry-run`, MUST allow real execution only for confirmed brew-backed tool/package steps and confirmed selected dotfile steps, MUST surface Homebrew bootstrap reporting as advisory data only, and MUST NOT introduce real execution outside that narrow path.
+The command MUST use noop execution contracts by default and in `--dry-run`, MUST allow real execution only for confirmed brew-backed tool/package steps with their existing cross-platform eligibility, confirmed Linux APT-backed tool/package steps, and confirmed selected dotfile steps, MUST surface Homebrew bootstrap reporting as advisory data only, and MUST NOT introduce real execution outside that narrow path. APT MUST use direct `apt-get install -y -- <package>` for `--yes` and explicit `sudo apt-get install -y -- <package>` for `--yes --sudo`, with a ten-minute `CommandRequest.Timeout`; APT metadata MUST be trimmed, non-empty, and not start with `-`.
 Dotfiles execution MUST remain dormant unless the confirmed apply composition root explicitly wires the provider with configured seams.
 
 #### Scenario: Apply uses noop execution contracts by default
@@ -107,7 +107,7 @@ Dotfiles execution MUST remain dormant unless the confirmed apply composition ro
 
 - GIVEN execution contracts are present
 - WHEN `apply` is reviewed end-to-end
-- THEN no real execution or production mutation occurs outside confirmed brew-backed steps and confirmed selected dotfile steps
+- THEN no real execution or production mutation occurs outside confirmed brew-backed steps with their existing eligibility, confirmed Linux APT-backed steps, and confirmed selected dotfile steps
 
 #### Scenario: Bootstrap data stays advisory
 
@@ -124,7 +124,7 @@ Dotfiles execution MUST remain dormant unless the confirmed apply composition ro
 
 ### Requirement: CLI composition uses injectable execution seams
 
-The CLI apply composition root MUST allow tests to inject a fake dotfiles `CommandRunner` and fake base-resolution/filesystem/prerequisite dependencies.
+The CLI apply composition root MUST allow tests to inject a fake dotfiles `CommandRunner`, Linux facts, `apt-get` and `sudo` availability seams, and fake base-resolution/filesystem/prerequisite dependencies.
 Production confirmed apply MAY use the real local command runner and resolver, but tests MUST NOT require or invoke real `dotlink`, host dotfiles state, clone, pull, submodule, fetch, or remote acquisition.
 
 #### Scenario: Tests inject fake dotfiles execution dependencies

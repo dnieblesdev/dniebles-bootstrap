@@ -89,7 +89,7 @@ The apply command MUST render an execution report separate from plan rendering.
 Successful dry-run execution MUST report `not_implemented` results, while confirmed mode MAY report real brew execution for brew-backed tool/package steps and MAY run selected dotfile resources through the dotfiles execution provider.
 Homebrew bootstrap reporting MUST remain advisory and non-mutating in default and `--dry-run` modes.
 User-facing step output MUST describe internally `not_implemented` work as `not supported yet`.
-Confirmed `--yes` output MUST explicitly state that brew-backed `tool` and `package` steps and selected dotfile resources may have changed the machine; unsupported, non-brew, and unselected work remains non-mutating or `not supported yet`.
+Confirmed `--yes` output MUST explicitly state that brew-backed `tool` and `package` steps with their existing cross-platform eligibility, Linux APT-backed `tool` and `package` steps, and selected dotfile resources may have changed the machine; unsupported, non-provider-backed, and unselected work remains non-mutating or `not supported yet`.
 When dotfiles execution is attempted, output MUST render the aggregate module result and every validated per-link detail. A resolution failure MUST show attempted source/candidate, selected modules, and safe cause; it MUST show `canonical base` only after successful canonicalization and validation.
 
 #### Scenario: Dry-run execution reports not_implemented
@@ -143,7 +143,7 @@ When dotfiles execution is attempted, output MUST render the aggregate module re
 
 The `apply` command MUST NOT perform real execution, host mutation, dotlink, clone, sparse checkout, retry, or concurrency behavior in default mode or `--dry-run` mode.
 It MUST remain a safe noop bridge over the existing plan unless `--yes` is explicitly provided.
-In confirmed `--yes` mode, mutation MUST remain limited to brew-backed tool/package execution and selected dotfile resource execution.
+In confirmed `--yes` mode, mutation MUST remain limited to brew-backed tool/package execution with its existing cross-platform eligibility, Linux APT-backed tool/package execution, and selected dotfile resource execution. APT direct execution MUST use `apt-get install -y -- <package>` with a ten-minute `CommandRequest.Timeout`; only explicit `--yes --sudo` may use `sudo apt-get install -y -- <package>` with the same bound, and `--sudo` outside `--yes` MUST be rejected. APT package metadata MUST be trimmed, non-empty, and not begin with `-`; `--` prevents option injection from custom catalog metadata and is not shell escaping.
 
 #### Scenario: No host mutation occurs
 
@@ -166,7 +166,7 @@ In confirmed `--yes` mode, mutation MUST remain limited to brew-backed tool/pack
 
 ### Requirement: Apply mode is explicit and safe by default
 
-The `apply` command MUST treat the default mode as non-mutating, MUST treat `--dry-run` as explicit non-mutating, and MUST treat `--yes` as the only confirmed mode that may mutate for brew-backed tool/package steps and selected dotfile resource steps.
+The `apply` command MUST treat the default mode as non-mutating, MUST treat `--dry-run` as explicit non-mutating, and MUST treat `--yes` as the only confirmed mode that may mutate for brew-backed tool/package steps with their existing cross-platform eligibility, Linux APT-backed tool/package steps, and selected dotfile resource steps. `--yes` uses direct APT execution; only explicit `--yes --sudo` uses sudo.
 The command MUST keep Homebrew bootstrap reporting non-mutating in default and `--dry-run` modes.
 
 #### Scenario: Default apply is non-mutating
@@ -185,7 +185,7 @@ The command MUST keep Homebrew bootstrap reporting non-mutating in default and `
 
 #### Scenario: Yes is the only confirmed mutating mode
 
-- GIVEN the user runs `dbootstrap apply --yes` with a brew-backed tool, brew-backed package, or selected dotfile step
+- GIVEN the user runs `dbootstrap apply --yes` with a brew-backed tool/package, Linux APT-backed tool/package, or selected dotfile step
 - WHEN the command executes
 - THEN the selected mode is reported as confirmed mode
 - AND real execution may be attempted only for those eligible steps
@@ -203,8 +203,8 @@ The `apply` command MUST reject `--dry-run --yes` as invalid input and MUST retu
 
 ### Requirement: Confirmed mode only wires eligible real execution
 
-The `apply` command MUST wire real execution only for brew-backed `tool` and `package` steps and selected `dotfile` steps when `--yes` is set.
-Runtime, non-brew, unselected, and unsupported steps MUST remain noop or unsupported.
+The `apply` command MUST wire real execution only for brew-backed `tool` and `package` steps with their existing cross-platform eligibility, Linux APT-backed `tool` and `package` steps, and selected `dotfile` steps when `--yes` is set. APT MUST be unavailable to non-Linux confirmed execution: a selected APT step MUST be `StepStatusFailed`, cause a non-zero confirmed outcome, and make zero apt/sudo probe or command calls. Missing `apt-get` or `sudo` MUST produce failed results without command execution.
+Runtime, non-provider-backed, unselected, and unsupported steps MUST remain noop or unsupported.
 Dotfile execution MUST use the existing dotfiles execution provider and MUST run only through configured composition seams.
 
 #### Scenario: Brew-backed steps may execute under yes
@@ -219,9 +219,9 @@ Dotfile execution MUST use the existing dotfiles execution provider and MUST run
 - WHEN apply executes
 - THEN the step is eligible for dotlink execution for module `bash`
 
-#### Scenario: Non-eligible steps stay non-mutating
+#### Scenario: Non-provider-backed steps stay non-mutating
 
-- GIVEN a runtime, non-brew, unsupported, or unselected step and `--yes`
+- GIVEN a runtime, non-provider-backed, unsupported, or unselected step and `--yes`
 - WHEN apply executes
 - THEN the step remains noop or returns unsupported
 
@@ -236,7 +236,7 @@ Dotfile execution MUST use the existing dotfiles execution provider and MUST run
 ### Requirement: Confirmed apply exits non-zero when eligible execution fails
 
 When `apply --yes` attempts eligible real execution and any eligible step reports `failed`, the CLI MUST return a non-zero exit status after rendering the execution report.
-This includes dotfiles failures caused by missing base path, missing `bin/dotlink`, missing selected module, command-runner failure, or command timeout.
+This includes selected non-Linux APT, APT command timeout, and dotfiles failures caused by missing base path, missing `bin/dotlink`, missing selected module, command-runner failure, or command timeout. APT failure MUST NOT cause retry or rollback claims.
 Default apply and `--dry-run` MUST remain non-mutating and MUST NOT use this rule to imply real execution was attempted.
 
 #### Scenario: Missing dotfiles prerequisite makes confirmed apply fail

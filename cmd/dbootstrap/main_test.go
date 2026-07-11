@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/execution"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
@@ -441,7 +442,8 @@ func TestRunUsageErrors(t *testing.T) {
 				"\n" +
 				"Commands:\n" +
 				"  plan    Build a deterministic plan for a profile\n" +
-				"  apply   Execute the plan safely; only --yes may run brew-backed installs and selected dotfiles\n" +
+				"  apply   Execute safely; --yes may run eligible brew-backed installs, eligible Linux APT installs, and selected dotfiles\n" +
+				"          APT uses apt-get directly with --yes, or sudo apt-get only with --yes --sudo\n" +
 				"error: command is required\n",
 		},
 		{
@@ -451,7 +453,8 @@ func TestRunUsageErrors(t *testing.T) {
 				"\n" +
 				"Commands:\n" +
 				"  plan    Build a deterministic plan for a profile\n" +
-				"  apply   Execute the plan safely; only --yes may run brew-backed installs and selected dotfiles\n" +
+				"  apply   Execute safely; --yes may run eligible brew-backed installs, eligible Linux APT installs, and selected dotfiles\n" +
+				"          APT uses apt-get directly with --yes, or sudo apt-get only with --yes --sudo\n" +
 				"error: unknown command \"deploy\"\n",
 		},
 	}
@@ -576,7 +579,7 @@ func TestRunApplyCommand(t *testing.T) {
 			wantCode:          exitSuccess,
 			wantStdout: "Execution Report\n" +
 				"Mode: confirmed\n" +
-				"Confirmed mode: brew-backed tool/package steps and selected dotfile resources may have changed this machine; runtime, non-brew, unselected, and unsupported steps remain non-mutating or not supported yet.\n" +
+				"Confirmed mode: brew-backed tool/package steps, eligible Linux APT-backed tool/package steps, and selected dotfile resources may have changed this machine; unsupported, non-provider-backed, and unselected steps remain non-mutating or not supported yet.\n" +
 				"\n" +
 				"Summary:\n" +
 				"- changed: 0\n" +
@@ -621,21 +624,21 @@ func TestRunApplyCommand(t *testing.T) {
 			args:       []string{"apply"},
 			wantCode:   exitUsage,
 			wantStdout: "",
-			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes]\nerror: --profile or --resource is required\n",
+			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo]]\nerror: --profile or --resource is required\n",
 		},
 		{
 			name:       "dry run and yes cannot be combined",
 			args:       []string{"apply", "--profile", "dev", "--catalog", "../../catalog/bootstrap.toml", "--dry-run", "--yes"},
 			wantCode:   exitUsage,
 			wantStdout: "",
-			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes]\nerror: --dry-run and --yes cannot be combined\n",
+			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo]]\nerror: --dry-run and --yes cannot be combined\n",
 		},
 		{
 			name:       "malformed resource ref is rejected",
 			args:       []string{"apply", "--resource", "git", "--catalog", "../../catalog/bootstrap.toml"},
 			wantCode:   exitUsage,
 			wantStdout: "",
-			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes]\nerror: invalid resource ref \"git\": expected kind:name\n",
+			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo]]\nerror: invalid resource ref \"git\": expected kind:name\n",
 		},
 		{
 			name:     "unknown profile exits with plan diagnostics and no execution report",
@@ -743,7 +746,7 @@ resources = ["tool:fd"]
 			wantContains: []string{
 				"Execution Report",
 				"Mode: confirmed",
-				"Confirmed mode: brew-backed tool/package steps and selected dotfile resources may have changed this machine",
+				"Confirmed mode: brew-backed tool/package steps, eligible Linux APT-backed tool/package steps, and selected dotfile resources may have changed this machine",
 				"tool:fd [unchanged]",
 				"Manual Actions:",
 				"homebrew:bootstrap: Install Homebrew",
@@ -921,17 +924,20 @@ resources = ["tool:fd", "package:ripgrep", "runtime:go"]
 	if gotCode != exitSuccess {
 		t.Fatalf("run() exit code = %d, want %d", gotCode, exitSuccess)
 	}
-	if len(runner.calls) != 1 {
-		t.Fatalf("command runner calls = %d, want 1", len(runner.calls))
+	if len(runner.calls) != 2 {
+		t.Fatalf("command runner calls = %d, want 2", len(runner.calls))
 	}
-	if got := runner.calls[0]; got.Executable != "brew" || strings.Join(got.Args, " ") != "install fd" {
+	if got := runner.calls[0]; got.Executable != "apt-get" || strings.Join(got.Args, " ") != "install -y -- ripgrep" {
+		t.Fatalf("CommandRequest = %#v, want apt-get install -y -- ripgrep", got)
+	}
+	if got := runner.calls[1]; got.Executable != "brew" || strings.Join(got.Args, " ") != "install fd" {
 		t.Fatalf("CommandRequest = %#v, want brew install fd", got)
 	}
 	out := stdout.String()
 	for _, want := range []string{
 		"Mode: confirmed",
 		"tool:fd [changed] installed fd with Homebrew",
-		"package:ripgrep [not supported yet] no brew install metadata for this resource",
+		"package:ripgrep [changed] installed ripgrep with APT",
 		"runtime:go [not supported yet] noop installer does not perform real installation",
 		"Manual Actions:\n- none\n",
 	} {
@@ -984,7 +990,7 @@ func TestRunApplyConfirmedDotfilesUsesInjectedRunner(t *testing.T) {
 	out := stdout.String()
 	for _, want := range []string{
 		"Mode: confirmed",
-		"Confirmed mode: brew-backed tool/package steps and selected dotfile resources may have changed this machine",
+		"Confirmed mode: brew-backed tool/package steps, eligible Linux APT-backed tool/package steps, and selected dotfile resources may have changed this machine",
 		"dotfile:bash [changed] installed dotfile module bash",
 		"dotfiles base: " + base,
 		"source: env",
@@ -1250,6 +1256,99 @@ func TestRunApplyCatalogLoadErrors(t *testing.T) {
 	if !strings.Contains(stderr.String(), "error: load catalog ") || !strings.Contains(stderr.String(), "no such file or directory") {
 		t.Fatalf("stderr = %q, want load error", stderr.String())
 	}
+}
+
+func TestParseApplyFlagsSudoRequiresConfirmedMode(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+		ok   bool
+		mode applyMode
+	}{
+		{"sudo with yes", []string{"--resource", "package:ripgrep", "--yes", "--sudo"}, true, applyModeConfirmedSudo},
+		{"sudo without yes", []string{"--resource", "package:ripgrep", "--sudo"}, false, ""},
+		{"sudo with dry run", []string{"--resource", "package:ripgrep", "--dry-run", "--sudo"}, false, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			_, _, mode, ok := parseApplyFlags(tt.args, &stderr)
+			if ok != tt.ok || mode != tt.mode {
+				t.Fatalf("ok=%t mode=%q, want ok=%t mode=%q", ok, mode, tt.ok, tt.mode)
+			}
+		})
+	}
+}
+
+func TestRunApplyAptFixtureContracts(t *testing.T) {
+	for _, tt := range []struct {
+		name, executable string
+		args, arguments  []string
+		facts            planning.EnvironmentFacts
+		available        map[string]bool
+		commandResult    execution.CommandResult
+		wantCode         int
+		wantOutput       string
+	}{
+		{"direct linux", "apt-get", []string{"--yes"}, []string{"install", "-y", "--", "ripgrep"}, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{"apt-get": true}, execution.CommandResult{Status: execution.CommandStatusSucceeded}, exitSuccess, "package:ripgrep [changed] installed ripgrep with APT"},
+		{"explicit sudo linux", "sudo", []string{"--yes", "--sudo"}, []string{"apt-get", "install", "-y", "--", "ripgrep"}, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{"apt-get": true, "sudo": true}, execution.CommandResult{Status: execution.CommandStatusSucceeded}, exitSuccess, "package:ripgrep [changed] installed ripgrep with APT"},
+		{"missing apt-get fails without command", "", []string{"--yes"}, nil, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{}, execution.CommandResult{}, exitFailure, "package:ripgrep [failed] apt-get executable is not available on PATH"},
+		{"missing sudo fails without command", "", []string{"--yes", "--sudo"}, nil, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{"apt-get": true}, execution.CommandResult{}, exitFailure, "package:ripgrep [failed] sudo executable is not available on PATH"},
+		{"command failure renders and exits non-zero", "apt-get", []string{"--yes"}, []string{"install", "-y", "--", "ripgrep"}, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{"apt-get": true}, execution.CommandResult{Status: execution.CommandStatusFailed}, exitFailure, "package:ripgrep [failed] apt install ripgrep failed with status failed"},
+		{"timeout renders and exits non-zero", "apt-get", []string{"--yes"}, []string{"install", "-y", "--", "ripgrep"}, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{"apt-get": true}, execution.CommandResult{Status: execution.CommandStatusTimedOut}, exitFailure, "package:ripgrep [failed] apt install ripgrep failed with status timed_out"},
+		{"non linux fails without probe", "", []string{"--yes"}, nil, planning.EnvironmentFacts{OS: "darwin"}, nil, execution.CommandResult{}, exitFailure, "package:ripgrep [failed] apt execution unsupported_os on darwin (command status not_run)"},
+		{"default does not probe", "", nil, nil, planning.EnvironmentFacts{OS: "linux"}, nil, execution.CommandResult{}, exitSuccess, "package:ripgrep [not supported yet] noop installer does not perform real installation"},
+		{"dry run does not probe", "", []string{"--dry-run"}, nil, planning.EnvironmentFacts{OS: "linux"}, nil, execution.CommandResult{}, exitSuccess, "package:ripgrep [not supported yet] noop installer does not perform real installation"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stubEnvironmentFacts(t, tt.facts)
+			stubInstallationState(t, planning.InstallationState{})
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+			originalExists := aptCommandExists
+			aptCommandExists = func(name string) bool {
+				if tt.available == nil {
+					t.Fatalf("APT must not be probed")
+				}
+				return tt.available[name]
+			}
+			t.Cleanup(func() { aptCommandExists = originalExists })
+			runner := &recordingCommandRunner{result: tt.commandResult}
+			stubExecutionFactories(t, func() execution.CommandRunner { return runner }, newHomebrewInstaller, newDotfilesInstaller)
+			args := append([]string{"apply", "--profile", "apt-fixture", "--catalog", writeAptCatalog(t)}, tt.args...)
+			var stdout, stderr bytes.Buffer
+			if code := run(args, &stdout, &stderr); code != tt.wantCode {
+				t.Fatalf("exit code = %d, want %d; stdout=%q stderr=%q", code, tt.wantCode, stdout.String(), stderr.String())
+			}
+			if tt.executable == "" {
+				if len(runner.calls) != 0 {
+					t.Fatalf("command calls = %#v, want none", runner.calls)
+				}
+			} else if len(runner.calls) != 1 || runner.calls[0].Executable != tt.executable || strings.Join(runner.calls[0].Args, "|") != strings.Join(tt.arguments, "|") || runner.calls[0].Timeout != 10*time.Minute {
+				t.Fatalf("command calls = %#v, want %s %#v with ten-minute timeout", runner.calls, tt.executable, tt.arguments)
+			}
+			if !strings.Contains(stdout.String(), tt.wantOutput) {
+				t.Fatalf("stdout = %q, want it to contain %q", stdout.String(), tt.wantOutput)
+			}
+		})
+	}
+}
+
+func writeAptCatalog(t *testing.T) string {
+	t.Helper()
+	return writeFile(t, t.TempDir(), "apt-provider.toml", `schema = "dniebles.catalog"
+version = 1
+
+[[packages]]
+id = "ripgrep"
+description = "Opt-in APT fixture"
+[packages.install]
+provider = "apt"
+package = "ripgrep"
+
+[[profiles]]
+id = "apt-fixture"
+resources = ["package:ripgrep"]
+`)
 }
 
 func writeDotfilesCatalog(t *testing.T, modules ...string) string {

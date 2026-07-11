@@ -54,8 +54,8 @@ func renderPlanResult(w io.Writer, profile string, resources []planning.Resource
 func renderExecutionReport(w io.Writer, mode applyMode, report execution.ExecutionReport) {
 	fmt.Fprintln(w, "Execution Report")
 	fmt.Fprintf(w, "Mode: %s\n", mode)
-	if mode == applyModeConfirmed {
-		fmt.Fprintln(w, "Confirmed mode: brew-backed tool/package steps and selected dotfile resources may have changed this machine; runtime, non-brew, unselected, and unsupported steps remain non-mutating or not supported yet.")
+	if isConfirmedMode(mode) {
+		fmt.Fprintln(w, "Confirmed mode: brew-backed tool/package steps, eligible Linux APT-backed tool/package steps, and selected dotfile resources may have changed this machine; unsupported, non-provider-backed, and unselected steps remain non-mutating or not supported yet.")
 	}
 	fmt.Fprintln(w)
 

@@ -81,6 +81,25 @@ func TestBrewOnlyInstallerSupportedKind(t *testing.T) {
 	}
 }
 
+func TestBrewOrAptInstallerRoutesOnlyMatchingProvider(t *testing.T) {
+	brew := &fakeInstaller{kind: planning.ResourceKindPackage, results: []StepResult{{Status: StepStatusInstalled}}}
+	apt := &fakeInstaller{kind: planning.ResourceKindPackage, results: []StepResult{{Status: StepStatusInstalled}}}
+	installer := BrewOrAptInstaller(planning.ResourceKindPackage, brew, apt)
+
+	for _, tt := range []struct {
+		provider          string
+		wantBrew, wantApt int
+	}{{"brew", 1, 0}, {"apt", 1, 1}, {"asdf", 1, 1}} {
+		result := installer.Install(context.Background(), brewOnlyStep(planning.ResourceKindPackage, "ripgrep", &planning.InstallMetadata{Provider: tt.provider, Package: "ripgrep"}))
+		if tt.provider == "asdf" && result.Status != StepStatusNotImplemented {
+			t.Fatalf("unsupported provider status = %q", result.Status)
+		}
+		if len(brew.calls) != tt.wantBrew || len(apt.calls) != tt.wantApt {
+			t.Fatalf("provider %q: brew calls=%d apt calls=%d", tt.provider, len(brew.calls), len(apt.calls))
+		}
+	}
+}
+
 func brewOnlyStep(kind planning.ResourceKind, name string, metadata *planning.InstallMetadata) planning.PlanStep {
 	ref := planning.ResourceRef{Kind: kind, Name: name}
 	return planning.PlanStep{
