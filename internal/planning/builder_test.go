@@ -64,6 +64,28 @@ func TestBuildPlanExpansionOrderingAndStability(t *testing.T) {
 	}
 }
 
+func TestBuildPlanProfileClosureIsCompleteAndDependenciesPrecedeDependents(t *testing.T) {
+	base := ResourceRef{Kind: ResourceKindTool, Name: "base"}
+	feature := ResourceRef{Kind: ResourceKindPackage, Name: "feature"}
+	extra := ResourceRef{Kind: ResourceKindRuntime, Name: "extra"}
+	catalog := Catalog{
+		Profiles: map[string]Profile{"dev": {Name: "dev", Bundles: []string{"workflow"}}},
+		Bundles:  map[string]Bundle{"workflow": {Name: "workflow", Resources: []ResourceRef{feature, extra}}},
+		Resources: map[ResourceRef]Resource{
+			base:    {Ref: base},
+			feature: {Ref: feature, DependsOn: []ResourceRef{base}},
+			extra:   {Ref: extra, DependsOn: []ResourceRef{feature}},
+		},
+	}
+
+	first := BuildPlan(catalog, PlanRequest{Profile: "dev"}, EnvironmentFacts{}, ConfigState{}, InstallationState{})
+	second := BuildPlan(catalog, PlanRequest{Profile: "dev"}, EnvironmentFacts{}, ConfigState{}, InstallationState{})
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("BuildPlan is not deterministic:\nfirst=%#v\nsecond=%#v", first, second)
+	}
+	assertCompleteDependencyOrder(t, refsFromSteps(first.Plan.Steps), map[ResourceRef][]ResourceRef{feature: {base}, extra: {feature}})
+}
+
 func TestBuildPlanInvalidReferencesAndMissingConfig(t *testing.T) {
 	unknownTool := ResourceRef{Kind: ResourceKindTool, Name: "missing-tool"}
 	catalog := Catalog{
@@ -410,6 +432,29 @@ func refsFromSteps(steps []PlanStep) []ResourceRef {
 		refs = append(refs, step.Ref)
 	}
 	return refs
+}
+
+func assertCompleteDependencyOrder(t *testing.T, steps []ResourceRef, dependencies map[ResourceRef][]ResourceRef) {
+	t.Helper()
+	positions := make(map[ResourceRef]int, len(steps))
+	for index, ref := range steps {
+		positions[ref] = index
+	}
+	if len(positions) != 3 {
+		t.Fatalf("steps = %#v, want complete three-resource closure", steps)
+	}
+	for dependent, required := range dependencies {
+		dependentPosition, found := positions[dependent]
+		if !found {
+			t.Fatalf("steps = %#v, missing dependent %s", steps, dependent)
+		}
+		for _, dependency := range required {
+			dependencyPosition, found := positions[dependency]
+			if !found || dependencyPosition >= dependentPosition {
+				t.Fatalf("steps = %#v, dependency %s must precede %s", steps, dependency, dependent)
+			}
+		}
+	}
 }
 
 func assertStatus(t *testing.T, result PlanResult, ref ResourceRef, status PlanStepStatus) {

@@ -1,11 +1,15 @@
 package toml
 
 import (
+	"fmt"
+	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
+	tomlv2 "github.com/pelletier/go-toml/v2"
 )
 
 func TestDecodeValidCatalog(t *testing.T) {
@@ -251,111 +255,334 @@ resources = ["dotfile:bash"]
 	}
 }
 
-func TestLoadFileAndBuildPlanFromFixture(t *testing.T) {
+func TestDefaultCatalogIntegrityUsesRawDeclarations(t *testing.T) {
+	raw := loadRawCatalog(t, "../../../catalog/bootstrap.toml")
+	if err := validateRawCatalog(raw); err != nil {
+		t.Fatalf("validate raw default catalog: %v", err)
+	}
+
 	catalog, err := LoadFile("../../../catalog/bootstrap.toml")
 	if err != nil {
 		t.Fatalf("LoadFile() error = %v", err)
 	}
+	assertDecodedCatalogMatchesRaw(t, catalog, raw)
+	assertProfilePlansMatchRawClosure(t, catalog, raw)
+}
 
-	wantCatalog := planning.Catalog{
-		Profiles: map[string]planning.Profile{
-			"dev": {Name: "dev", Bundles: []string{"cli"}, Resources: []planning.ResourceRef{runtimeGo}},
-		},
-		Bundles: map[string]planning.Bundle{
-			"cli": {Name: "cli", Resources: []planning.ResourceRef{toolGit, packageRipgrep, packageJq}},
-		},
-		Resources: map[planning.ResourceRef]planning.Resource{
-			toolGit: {
-				Ref:         toolGit,
-				Description: "Version control",
-				DependsOn:   []planning.ResourceRef{},
-				Install:     &planning.InstallMetadata{Provider: "brew", Package: "git"},
-				Presence:    &planning.PresenceMetadata{Kind: "command_exists", Name: "git"},
-				Conditions:  planning.EnvironmentConditions{OS: []string{"linux", "darwin"}},
-			},
-			runtimeGo: {
-				Ref:          runtimeGo,
-				Description:  "Go toolchain",
-				DependsOn:    []planning.ResourceRef{toolGit},
-				ConfigPolicy: planning.ConfigPolicy{RequiredKeys: []string{"go.env"}},
-				Install:      &planning.InstallMetadata{Provider: "asdf", Package: "golang"},
-				Presence:     &planning.PresenceMetadata{Kind: "command_exists", Name: "go"},
-				Conditions:   planning.EnvironmentConditions{OS: []string{"linux", "darwin"}, Arch: []string{"amd64", "arm64"}},
-			},
-			packageRipgrep: {
-				Ref:         packageRipgrep,
-				Description: "Fast text search",
-				DependsOn:   []planning.ResourceRef{toolGit},
-				Install:     &planning.InstallMetadata{Provider: "brew", Package: "ripgrep"},
-				Presence:    &planning.PresenceMetadata{Kind: "command_exists", Name: "rg"},
-			},
-			packageJq: {
-				Ref:         packageJq,
-				Description: "JSON processor",
-				DependsOn:   []planning.ResourceRef{toolGit},
-				Install:     &planning.InstallMetadata{Provider: "brew", Package: "jq"},
-				Presence:    &planning.PresenceMetadata{Kind: "command_exists", Name: "jq"},
-			},
-			dotBash: {
-				Ref:         dotBash,
-				Description: "Bash dotfiles",
-				DependsOn:   []planning.ResourceRef{},
-			},
-		},
+func TestRawCatalogRejectsOrphanedBrewResourceEvenWhenPointSelectable(t *testing.T) {
+	raw := rawCatalog{
+		Tools:    []rawResource{{ID: "workflow", Install: rawInstall{Provider: "brew", Package: "workflow"}, Presence: rawPresence{Kind: "command_exists", Name: "workflow"}}, {ID: "orphan", Install: rawInstall{Provider: "brew", Package: "orphan"}, Presence: rawPresence{Kind: "command_exists", Name: "orphan"}}},
+		Profiles: []rawProfile{{ID: "dev", Resources: []string{"tool:workflow"}}},
 	}
-	if !reflect.DeepEqual(catalog, wantCatalog) {
-		t.Fatalf("default catalog = %#v, want %#v", catalog, wantCatalog)
+	if err := validateRawCatalog(raw); err == nil || !strings.Contains(err.Error(), "orphan") {
+		t.Fatalf("validateRawCatalog() error = %v, want orphan rejection", err)
 	}
 
-	result := planning.BuildPlan(
-		catalog,
-		planning.PlanRequest{Profile: "dev"},
-		planning.EnvironmentFacts{OS: "linux", Arch: "amd64"},
-		planning.ConfigState{PresentKeys: map[string]bool{"go.env": true}},
-		planning.InstallationState{},
-	)
+	catalog, err := Decode(strings.NewReader(`
+[[tools]]
+id = "workflow"
 
-	wantSteps := []planning.ResourceRef{toolGit, packageJq, packageRipgrep, runtimeGo}
-	if got := refsFromSteps(result.Plan.Steps); !reflect.DeepEqual(got, wantSteps) {
-		t.Fatalf("planned steps = %#v, want %#v", got, wantSteps)
+[[tools]]
+id = "orphan"
+
+[[profiles]]
+id = "dev"
+resources = ["tool:workflow"]
+`))
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
 	}
-	assertStatus(t, result, toolGit, planning.PlanStepStatusPlanned)
-	assertStatus(t, result, packageJq, planning.PlanStepStatusPlanned)
-	assertStatus(t, result, packageRipgrep, planning.PlanStepStatusPlanned)
-	assertStatus(t, result, runtimeGo, planning.PlanStepStatusPlanned)
+	result := planning.BuildPlan(catalog, planning.PlanRequest{Resources: []planning.ResourceRef{{Kind: planning.ResourceKindTool, Name: "orphan"}}}, planning.EnvironmentFacts{}, planning.ConfigState{}, planning.InstallationState{})
+	if got := refsFromSteps(result.Plan.Steps); !reflect.DeepEqual(got, []planning.ResourceRef{{Kind: planning.ResourceKindTool, Name: "orphan"}}) {
+		t.Fatalf("point selection = %#v, want orphan selectable independently", got)
+	}
+}
 
-	for _, step := range result.Plan.Steps {
-		switch step.Ref {
-		case toolGit:
-			if got, want := step.Resource.Install, (&planning.InstallMetadata{Provider: "brew", Package: "git"}); !reflect.DeepEqual(got, want) {
-				t.Fatalf("tool install metadata = %#v, want %#v", got, want)
+type rawCatalog struct {
+	Tools    []rawResource `toml:"tools"`
+	Runtimes []rawResource `toml:"runtimes"`
+	Packages []rawResource `toml:"packages"`
+	Dotfiles []rawResource `toml:"dotfiles"`
+	Bundles  []rawBundle   `toml:"bundles"`
+	Profiles []rawProfile  `toml:"profiles"`
+}
+
+type rawResource struct {
+	ID        string      `toml:"id"`
+	DependsOn []string    `toml:"depends_on"`
+	Install   rawInstall  `toml:"install"`
+	Presence  rawPresence `toml:"presence"`
+}
+
+type rawInstall struct {
+	Provider string `toml:"provider"`
+	Package  string `toml:"package"`
+}
+
+type rawPresence struct {
+	Kind string `toml:"kind"`
+	Name string `toml:"name"`
+}
+
+type rawBundle struct {
+	ID        string   `toml:"id"`
+	Resources []string `toml:"resources"`
+}
+
+type rawProfile struct {
+	ID        string   `toml:"id"`
+	Bundles   []string `toml:"bundles"`
+	Resources []string `toml:"resources"`
+}
+
+func loadRawCatalog(t *testing.T, path string) rawCatalog {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read raw catalog: %v", err)
+	}
+	var raw rawCatalog
+	if err := tomlv2.Unmarshal(contents, &raw); err != nil {
+		t.Fatalf("decode raw catalog: %v", err)
+	}
+	return raw
+}
+
+func validateRawCatalog(raw rawCatalog) error {
+	resources, err := raw.resources()
+	if err != nil {
+		return err
+	}
+	bundles := map[string]rawBundle{}
+	for _, bundle := range raw.Bundles {
+		if bundle.ID == "" {
+			return fmt.Errorf("bundle has empty id")
+		}
+		if _, duplicate := bundles[bundle.ID]; duplicate {
+			return fmt.Errorf("duplicate bundle %q", bundle.ID)
+		}
+		bundles[bundle.ID] = bundle
+		for _, value := range bundle.Resources {
+			ref, err := rawRef(value)
+			if err != nil {
+				return fmt.Errorf("bundle %q: %w", bundle.ID, err)
 			}
-			if got, want := step.Resource.Presence, (&planning.PresenceMetadata{Kind: "command_exists", Name: "git"}); !reflect.DeepEqual(got, want) {
-				t.Fatalf("tool presence metadata = %#v, want %#v", got, want)
-			}
-		case packageRipgrep:
-			if got, want := step.Resource.Install, (&planning.InstallMetadata{Provider: "brew", Package: "ripgrep"}); !reflect.DeepEqual(got, want) {
-				t.Fatalf("package install metadata = %#v, want %#v", got, want)
-			}
-			if got, want := step.Resource.Presence, (&planning.PresenceMetadata{Kind: "command_exists", Name: "rg"}); !reflect.DeepEqual(got, want) {
-				t.Fatalf("package presence metadata = %#v, want %#v", got, want)
-			}
-		case packageJq:
-			if got, want := step.Resource.Install, (&planning.InstallMetadata{Provider: "brew", Package: "jq"}); !reflect.DeepEqual(got, want) {
-				t.Fatalf("package install metadata = %#v, want %#v", got, want)
-			}
-			if got, want := step.Resource.Presence, (&planning.PresenceMetadata{Kind: "command_exists", Name: "jq"}); !reflect.DeepEqual(got, want) {
-				t.Fatalf("package presence metadata = %#v, want %#v", got, want)
-			}
-		case runtimeGo:
-			if got, want := step.Resource.Install, (&planning.InstallMetadata{Provider: "asdf", Package: "golang"}); !reflect.DeepEqual(got, want) {
-				t.Fatalf("runtime install metadata = %#v, want %#v", got, want)
-			}
-			if got, want := step.Resource.Presence, (&planning.PresenceMetadata{Kind: "command_exists", Name: "go"}); !reflect.DeepEqual(got, want) {
-				t.Fatalf("runtime presence metadata = %#v, want %#v", got, want)
+			if _, ok := resources[ref]; !ok {
+				return fmt.Errorf("bundle %q references unknown resource %q", bundle.ID, value)
 			}
 		}
 	}
+
+	for ref, resource := range resources {
+		for _, value := range resource.DependsOn {
+			dependency, err := rawRef(value)
+			if err != nil {
+				return fmt.Errorf("resource %s: %w", ref, err)
+			}
+			if _, ok := resources[dependency]; !ok {
+				return fmt.Errorf("resource %s references unknown dependency %q", ref, value)
+			}
+		}
+		if resource.Install.Provider != "brew" {
+			continue
+		}
+		if resource.Install.Package == "" {
+			return fmt.Errorf("brew resource %s has empty package", ref)
+		}
+		if resource.Presence.Kind != "command_exists" || resource.Presence.Name == "" {
+			return fmt.Errorf("brew resource %s has invalid presence metadata", ref)
+		}
+	}
+
+	workflow := map[planning.ResourceRef]bool{}
+	for _, profile := range raw.Profiles {
+		closure, err := rawProfileClosure(profile, resources, bundles)
+		if err != nil {
+			return err
+		}
+		for ref := range closure {
+			workflow[ref] = true
+		}
+	}
+	for ref, resource := range resources {
+		if resource.Install.Provider == "brew" && !workflow[ref] {
+			return fmt.Errorf("brew resource %s is orphaned from declared profile roots", ref)
+		}
+	}
+	return nil
+}
+
+func (raw rawCatalog) resources() (map[planning.ResourceRef]rawResource, error) {
+	resources := map[planning.ResourceRef]rawResource{}
+	for _, section := range []struct {
+		kind      planning.ResourceKind
+		resources []rawResource
+	}{
+		{planning.ResourceKindTool, raw.Tools},
+		{planning.ResourceKindRuntime, raw.Runtimes},
+		{planning.ResourceKindPackage, raw.Packages},
+		{planning.ResourceKindDotfile, raw.Dotfiles},
+	} {
+		for _, resource := range section.resources {
+			ref := planning.ResourceRef{Kind: section.kind, Name: resource.ID}
+			if resource.ID == "" {
+				return nil, fmt.Errorf("resource has empty id")
+			}
+			if _, duplicate := resources[ref]; duplicate {
+				return nil, fmt.Errorf("duplicate resource %s", ref)
+			}
+			resources[ref] = resource
+		}
+	}
+	return resources, nil
+}
+
+func rawProfileClosure(profile rawProfile, resources map[planning.ResourceRef]rawResource, bundles map[string]rawBundle) (map[planning.ResourceRef]bool, error) {
+	closure := map[planning.ResourceRef]bool{}
+	var visit func(planning.ResourceRef) error
+	visit = func(ref planning.ResourceRef) error {
+		if closure[ref] {
+			return nil
+		}
+		resource, ok := resources[ref]
+		if !ok {
+			return fmt.Errorf("profile %q references unknown resource %s", profile.ID, ref)
+		}
+		closure[ref] = true
+		for _, value := range resource.DependsOn {
+			dependency, err := rawRef(value)
+			if err != nil {
+				return fmt.Errorf("resource %s: %w", ref, err)
+			}
+			if err := visit(dependency); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, value := range profile.Resources {
+		ref, err := rawRef(value)
+		if err != nil {
+			return nil, fmt.Errorf("profile %q: %w", profile.ID, err)
+		}
+		if err := visit(ref); err != nil {
+			return nil, err
+		}
+	}
+	for _, bundleID := range profile.Bundles {
+		bundle, ok := bundles[bundleID]
+		if !ok {
+			return nil, fmt.Errorf("profile %q references unknown bundle %q", profile.ID, bundleID)
+		}
+		for _, value := range bundle.Resources {
+			ref, err := rawRef(value)
+			if err != nil {
+				return nil, fmt.Errorf("bundle %q: %w", bundleID, err)
+			}
+			if err := visit(ref); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return closure, nil
+}
+
+func rawRef(value string) (planning.ResourceRef, error) {
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return planning.ResourceRef{}, fmt.Errorf("invalid resource ref %q", value)
+	}
+	kinds := map[string]planning.ResourceKind{"tool": planning.ResourceKindTool, "runtime": planning.ResourceKindRuntime, "package": planning.ResourceKindPackage, "dotfile": planning.ResourceKindDotfile}
+	kind, ok := kinds[parts[0]]
+	if !ok {
+		return planning.ResourceRef{}, fmt.Errorf("unsupported resource kind %q", parts[0])
+	}
+	return planning.ResourceRef{Kind: kind, Name: parts[1]}, nil
+}
+
+func assertDecodedCatalogMatchesRaw(t *testing.T, catalog planning.Catalog, raw rawCatalog) {
+	t.Helper()
+	resources, err := raw.resources()
+	if err != nil {
+		t.Fatalf("raw resources: %v", err)
+	}
+	if len(catalog.Resources) != len(resources) || len(catalog.Bundles) != len(raw.Bundles) || len(catalog.Profiles) != len(raw.Profiles) {
+		t.Fatalf("decoded section counts = resources:%d bundles:%d profiles:%d, raw = resources:%d bundles:%d profiles:%d", len(catalog.Resources), len(catalog.Bundles), len(catalog.Profiles), len(resources), len(raw.Bundles), len(raw.Profiles))
+	}
+	for ref, rawResource := range resources {
+		decoded, ok := catalog.Resources[ref]
+		if !ok {
+			t.Fatalf("decoded catalog missing raw resource %s", ref)
+		}
+		if rawResource.Install.Provider == "brew" && (decoded.Install == nil || decoded.Install.Provider == "" || decoded.Install.Package == "" || decoded.Presence == nil || decoded.Presence.Kind != "command_exists" || decoded.Presence.Name == "") {
+			t.Fatalf("decoded brew metadata for %s = install:%#v presence:%#v", ref, decoded.Install, decoded.Presence)
+		}
+	}
+	for _, bundle := range raw.Bundles {
+		if _, ok := catalog.Bundles[bundle.ID]; !ok {
+			t.Fatalf("decoded catalog missing raw bundle %q", bundle.ID)
+		}
+	}
+	for _, profile := range raw.Profiles {
+		if _, ok := catalog.Profiles[profile.ID]; !ok {
+			t.Fatalf("decoded catalog missing raw profile %q", profile.ID)
+		}
+	}
+}
+
+func assertProfilePlansMatchRawClosure(t *testing.T, catalog planning.Catalog, raw rawCatalog) {
+	t.Helper()
+	resources, err := raw.resources()
+	if err != nil {
+		t.Fatalf("raw resources: %v", err)
+	}
+	bundles := map[string]rawBundle{}
+	for _, bundle := range raw.Bundles {
+		bundles[bundle.ID] = bundle
+	}
+	for _, profile := range raw.Profiles {
+		t.Run(profile.ID, func(t *testing.T) {
+			closure, err := rawProfileClosure(profile, resources, bundles)
+			if err != nil {
+				t.Fatalf("raw profile closure: %v", err)
+			}
+			first := planning.BuildPlan(catalog, planning.PlanRequest{Profile: profile.ID}, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"}, planning.ConfigState{PresentKeys: map[string]bool{"go.env": true}}, planning.InstallationState{})
+			second := planning.BuildPlan(catalog, planning.PlanRequest{Profile: profile.ID}, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"}, planning.ConfigState{PresentKeys: map[string]bool{"go.env": true}}, planning.InstallationState{})
+			if !reflect.DeepEqual(first, second) {
+				t.Fatalf("BuildPlan(%q) is not deterministic", profile.ID)
+			}
+			steps := refsFromSteps(first.Plan.Steps)
+			if !reflect.DeepEqual(sortedRefs(steps), sortedRefsFromSet(closure)) {
+				t.Fatalf("plan steps = %#v, raw closure = %#v", steps, sortedRefsFromSet(closure))
+			}
+			positions := map[planning.ResourceRef]int{}
+			for index, ref := range steps {
+				positions[ref] = index
+			}
+			for ref := range closure {
+				for _, value := range resources[ref].DependsOn {
+					dependency, _ := rawRef(value)
+					if positions[dependency] >= positions[ref] {
+						t.Fatalf("dependency %s must precede %s in %#v", dependency, ref, steps)
+					}
+				}
+			}
+		})
+	}
+}
+
+func sortedRefs(refs []planning.ResourceRef) []planning.ResourceRef {
+	sorted := append([]planning.ResourceRef(nil), refs...)
+	sort.Slice(sorted, func(i, j int) bool { return fmt.Sprint(sorted[i]) < fmt.Sprint(sorted[j]) })
+	return sorted
+}
+
+func sortedRefsFromSet(refs map[planning.ResourceRef]bool) []planning.ResourceRef {
+	result := make([]planning.ResourceRef, 0, len(refs))
+	for ref := range refs {
+		result = append(result, ref)
+	}
+	return sortedRefs(result)
 }
 
 func TestDecodeValidCatalogDelegatesSemanticIssuesToPlanner(t *testing.T) {

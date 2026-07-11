@@ -2,63 +2,6 @@
 
 ## ADDED Requirements
 
-### Requirement: Structured install metadata
-
-Catalog resources MUST allow inert install metadata to be stored as structured data for downstream provider selection.
-The system SHALL preserve provider/package information without inferring execution behavior.
-
-#### Scenario: Provider and package metadata are accepted
-
-- GIVEN a catalog resource with install metadata containing a provider and package name
-- WHEN the resource is decoded into the catalog model
-- THEN the install metadata is preserved as structured data
-- AND no shell command is required
-
-#### Scenario: Missing install metadata remains valid
-
-- GIVEN a catalog resource without install metadata
-- WHEN the resource is decoded
-- THEN the resource remains valid
-- AND no default install command is synthesized
-
-### Requirement: Structured presence metadata
-
-Catalog resources MUST allow inert presence metadata to describe how existing tools are detected.
-The system SHALL support presence checks as data using check kinds such as path or command_exists.
-
-#### Scenario: Presence check metadata is preserved
-
-- GIVEN a catalog resource with presence metadata using kind path or command_exists
-- WHEN the resource is decoded and mapped into planning types
-- THEN the presence metadata is preserved unchanged
-- AND it is not executed during planning
-
-#### Scenario: Presence metadata is absent
-
-- GIVEN a catalog resource without presence metadata
-- WHEN the resource is processed
-- THEN planning continues normally
-- AND no presence check is inferred
-
-### Requirement: Inert metadata propagation
-
-The planning model MUST carry catalog install and presence metadata forward as inert resource data.
-The system SHALL NOT change planning decisions, ordering, or execution semantics because metadata is present.
-
-#### Scenario: Metadata survives plan creation
-
-- GIVEN a resource with structured install and presence metadata
-- WHEN a plan is built
-- THEN the resulting plan resource contains the same metadata
-- AND existing plan behavior is unchanged
-
-#### Scenario: Metadata does not alter planning outcome
-
-- GIVEN the same catalog inputs with and without metadata
-- WHEN plans are built for both inputs
-- THEN the planner produces equivalent behavior for existing steps
-- AND metadata only affects preserved resource data
-
 ### Requirement: Catalog contracts remain inventory-independent
 
 Active canonical and development contracts going forward MUST derive default-catalog expectations from declared data without enumerating current resource names. Exact CLI behavior contracts MUST use minimal custom catalogs, while retaining a derived smoke check for the default catalog. Archived historical artifacts are immutable and MAY truthfully retain prior resource enumerations.
@@ -83,9 +26,12 @@ Active canonical and development contracts going forward MUST derive default-cat
 - WHEN the change is archived
 - THEN archived specifications and prior change artifacts remain unchanged
 
+## MODIFIED Requirements
+
 ### Requirement: Default catalog declares generic reachable Brew-backed metadata
 
 The default catalog MUST remain the runtime source of truth for its declared resources, bundles, profiles, dependencies, and structured metadata. Every declared Brew-backed tool or package intended for default user workflows MUST have non-empty Brew package metadata and a `command_exists` presence check, and MUST be reachable from a declared profile root through profile resources, profile bundles, bundle resources, and transitive resource dependencies. This workflow-membership closure MUST be derived from raw declarations independently of decoded planning maps. Point-resource selection MUST NOT satisfy this membership invariant, although separate contracts MAY test explicit selection behavior. Generic active canonical and development contracts going forward MUST validate section identity, reference resolution, profile-plan closure, deterministic planning, and dependency-before-dependent ordering without naming individual resources. No runtime behavior, schema, default catalog declaration, provider capability, or archive history is changed by this refactor.
+(Previously: The default catalog was required to contain specifically named resources, exact metadata, exact bundle membership, and a prohibition on additional resources.)
 
 #### Scenario: Generic Brew metadata is present
 

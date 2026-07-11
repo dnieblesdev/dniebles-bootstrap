@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	catalogtoml "github.com/dnieblesdev/dniebles-bootstrap/internal/catalog/toml"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/execution"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 )
@@ -24,6 +27,7 @@ const (
 )
 
 func TestRunPlanCommand(t *testing.T) {
+	catalogPath := writePrimaryCatalog(t)
 	tests := []struct {
 		name              string
 		args              []string
@@ -258,13 +262,13 @@ func TestRunPlanCommand(t *testing.T) {
 			stubConfigState(t, tt.configState)
 			stubDotfilesState(t, tt.dotfilesState)
 
-			gotCode := run(tt.args, &stdout, &stderr)
+			gotCode := run(replaceCatalogPath(tt.args, catalogPath), &stdout, &stderr)
 
 			if gotCode != tt.wantCode {
 				t.Fatalf("run() exit code = %d, want %d", gotCode, tt.wantCode)
 			}
-			if got := stdout.String(); got != tt.wantStdout {
-				t.Fatalf("stdout = %q, want %q", got, tt.wantStdout)
+			if got, want := stdout.String(), strings.ReplaceAll(tt.wantStdout, "../../catalog/bootstrap.toml", catalogPath); got != want {
+				t.Fatalf("stdout = %q, want %q", got, want)
 			}
 			if got := stderr.String(); got != tt.wantStderr {
 				t.Fatalf("stderr = %q, want %q", got, tt.wantStderr)
@@ -512,6 +516,7 @@ func TestRunPlanCatalogLoadErrorsSkipDetection(t *testing.T) {
 }
 
 func TestRunApplyCommand(t *testing.T) {
+	catalogPath := writePrimaryCatalog(t)
 	tests := []struct {
 		name              string
 		args              []string
@@ -668,19 +673,23 @@ func TestRunApplyCommand(t *testing.T) {
 			stubDotfilesState(t, planning.InstallationState{})
 			stubBrewCommandExists(t, false)
 
-			gotCode := run(tt.args, &stdout, &stderr)
+			gotCode := run(replaceCatalogPath(tt.args, catalogPath), &stdout, &stderr)
 
 			if gotCode != tt.wantCode {
 				t.Fatalf("run() exit code = %d, want %d", gotCode, tt.wantCode)
 			}
-			if got := stdout.String(); got != tt.wantStdout {
-				t.Fatalf("stdout = %q, want %q", got, tt.wantStdout)
+			if got, want := stdout.String(), strings.ReplaceAll(tt.wantStdout, "../../catalog/bootstrap.toml", catalogPath); got != want {
+				t.Fatalf("stdout = %q, want %q", got, want)
 			}
 			if got := stderr.String(); got != tt.wantStderr {
 				t.Fatalf("stderr = %q, want %q", got, tt.wantStderr)
 			}
 		})
 	}
+}
+
+func TestRunPlanDefaultCatalogSmokeIsDerived(t *testing.T) {
+	assertDefaultCatalogPlanSmoke(t)
 }
 
 func TestRunApplyHomebrewBootstrap(t *testing.T) {
@@ -1349,6 +1358,133 @@ package = "ripgrep"
 id = "apt-fixture"
 resources = ["package:ripgrep"]
 `)
+}
+
+func writePrimaryCatalog(t *testing.T) string {
+	t.Helper()
+	return writeFile(t, t.TempDir(), "catalog.toml", `
+schema = "dniebles.catalog"
+version = 1
+
+[[tools]]
+id = "git"
+description = "Version control"
+os = ["linux", "darwin"]
+[tools.install]
+provider = "brew"
+package = "git"
+[tools.presence]
+kind = "command_exists"
+name = "git"
+
+[[runtimes]]
+id = "go"
+description = "Go toolchain"
+depends_on = ["tool:git"]
+config_required = ["go.env"]
+os = ["linux", "darwin"]
+arch = ["amd64", "arm64"]
+[runtimes.install]
+provider = "asdf"
+package = "golang"
+[runtimes.presence]
+kind = "command_exists"
+name = "go"
+
+[[packages]]
+id = "ripgrep"
+description = "Fast text search"
+depends_on = ["tool:git"]
+[packages.install]
+provider = "brew"
+package = "ripgrep"
+[packages.presence]
+kind = "command_exists"
+name = "rg"
+
+[[packages]]
+id = "jq"
+description = "JSON processor"
+depends_on = ["tool:git"]
+[packages.install]
+provider = "brew"
+package = "jq"
+[packages.presence]
+kind = "command_exists"
+name = "jq"
+
+[[dotfiles]]
+id = "bash"
+description = "Bash dotfiles"
+
+[[bundles]]
+id = "cli"
+resources = ["tool:git", "package:ripgrep", "package:jq"]
+
+[[profiles]]
+id = "dev"
+bundles = ["cli"]
+resources = ["runtime:go"]
+`)
+}
+
+func replaceCatalogPath(args []string, path string) []string {
+	replaced := append([]string(nil), args...)
+	for index, value := range replaced {
+		if value == "../../catalog/bootstrap.toml" {
+			replaced[index] = path
+		}
+	}
+	return replaced
+}
+
+func assertDefaultCatalogPlanSmoke(t *testing.T) {
+	t.Helper()
+	const catalogPath = "../../catalog/bootstrap.toml"
+	catalog, err := catalogtoml.LoadFile(catalogPath)
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+	profiles := make([]string, 0, len(catalog.Profiles))
+	for profile := range catalog.Profiles {
+		profiles = append(profiles, profile)
+	}
+	sort.Strings(profiles)
+	if len(profiles) == 0 {
+		t.Fatal("default catalog has no declared profiles")
+	}
+	for _, profile := range profiles {
+		stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+		stubInstallationState(t, planning.InstallationState{})
+		stubConfigState(t, planning.ConfigState{})
+		stubDotfilesState(t, planning.InstallationState{})
+		wantPlan, _, err := buildPlan(catalogPath, planning.PlanRequest{Profile: profile})
+		if err != nil {
+			t.Fatalf("buildPlan(%q) error = %v", profile, err)
+		}
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{"plan", "--profile", profile, "--catalog", catalogPath}, &stdout, &stderr); code != exitSuccess {
+			t.Fatalf("run() exit code = %d, want %d; stderr=%q", code, exitSuccess, stderr.String())
+		}
+		out := stdout.String()
+		if !strings.Contains(out, "Plan profile: "+profile) || !strings.Contains(out, "Steps:\n") || !strings.Contains(out, "Results:\n") {
+			t.Fatalf("default plan smoke output = %q", out)
+		}
+		statusByRef := make(map[planning.ResourceRef]planning.PlanStepStatus, len(wantPlan.Results))
+		for _, result := range wantPlan.Results {
+			statusByRef[result.Ref] = result.Status
+		}
+		for index, step := range wantPlan.Plan.Steps {
+			status := statusByRef[step.Ref]
+			if status == "" {
+				status = planning.PlanStepStatusPlanned
+			}
+			wantRenderedStep := fmt.Sprintf("%d. %s:%s [%s] %s\n", index+1, step.Ref.Kind, step.Ref.Name, status, step.Resource.Description)
+			if count := strings.Count(out, wantRenderedStep); count != 1 {
+				t.Fatalf("profile %q rendered step %q %d times, want exactly once; stdout=%q", profile, wantRenderedStep, count, out)
+			}
+		}
+	}
 }
 
 func writeDotfilesCatalog(t *testing.T, modules ...string) string {
