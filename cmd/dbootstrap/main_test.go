@@ -448,6 +448,7 @@ func TestRunUsageErrors(t *testing.T) {
 				"  plan    Build a deterministic plan for a profile\n" +
 				"  apply   Execute safely; --yes may run eligible brew-backed installs, eligible Linux APT installs, and selected dotfiles\n" +
 				"          APT uses apt-get directly with --yes, or sudo apt-get only with --yes --sudo\n" +
+				"  bootstrap  Execute an explicit selection through the safe apply workflow\n" +
 				"error: command is required\n",
 		},
 		{
@@ -459,6 +460,7 @@ func TestRunUsageErrors(t *testing.T) {
 				"  plan    Build a deterministic plan for a profile\n" +
 				"  apply   Execute safely; --yes may run eligible brew-backed installs, eligible Linux APT installs, and selected dotfiles\n" +
 				"          APT uses apt-get directly with --yes, or sudo apt-get only with --yes --sudo\n" +
+				"  bootstrap  Execute an explicit selection through the safe apply workflow\n" +
 				"error: unknown command \"deploy\"\n",
 		},
 	}
@@ -1288,7 +1290,7 @@ func TestParseApplyFlagsSudoRequiresConfirmedMode(t *testing.T) {
 	}
 }
 
-func TestRunApplyAptFixtureContracts(t *testing.T) {
+func TestRunBootstrapAptFixtureContracts(t *testing.T) {
 	for _, tt := range []struct {
 		name, executable string
 		args, arguments  []string
@@ -1298,7 +1300,7 @@ func TestRunApplyAptFixtureContracts(t *testing.T) {
 		wantCode         int
 		wantOutput       string
 	}{
-		{"direct linux", "apt-get", []string{"--yes"}, []string{"install", "-y", "--", "ripgrep"}, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{"apt-get": true}, execution.CommandResult{Status: execution.CommandStatusSucceeded}, exitSuccess, "package:ripgrep [changed] installed ripgrep with APT"},
+		{"apt present and brew absent", "apt-get", []string{"--yes"}, []string{"install", "-y", "--", "ripgrep"}, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{"apt-get": true}, execution.CommandResult{Status: execution.CommandStatusSucceeded}, exitSuccess, "package:ripgrep [changed] installed ripgrep with APT"},
 		{"explicit sudo linux", "sudo", []string{"--yes", "--sudo"}, []string{"apt-get", "install", "-y", "--", "ripgrep"}, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{"apt-get": true, "sudo": true}, execution.CommandResult{Status: execution.CommandStatusSucceeded}, exitSuccess, "package:ripgrep [changed] installed ripgrep with APT"},
 		{"missing apt-get fails without command", "", []string{"--yes"}, nil, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{}, execution.CommandResult{}, exitFailure, "package:ripgrep [failed] apt-get executable is not available on PATH"},
 		{"missing sudo fails without command", "", []string{"--yes", "--sudo"}, nil, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{"apt-get": true}, execution.CommandResult{}, exitFailure, "package:ripgrep [failed] sudo executable is not available on PATH"},
@@ -1313,6 +1315,7 @@ func TestRunApplyAptFixtureContracts(t *testing.T) {
 			stubInstallationState(t, planning.InstallationState{})
 			stubConfigState(t, planning.ConfigState{})
 			stubDotfilesState(t, planning.InstallationState{})
+			stubBrewCommandExists(t, false)
 			originalExists := aptCommandExists
 			aptCommandExists = func(name string) bool {
 				if tt.available == nil {
@@ -1323,7 +1326,7 @@ func TestRunApplyAptFixtureContracts(t *testing.T) {
 			t.Cleanup(func() { aptCommandExists = originalExists })
 			runner := &recordingCommandRunner{result: tt.commandResult}
 			stubExecutionFactories(t, func() execution.CommandRunner { return runner }, newHomebrewInstaller, newDotfilesInstaller)
-			args := append([]string{"apply", "--profile", "apt-fixture", "--catalog", writeAptCatalog(t)}, tt.args...)
+			args := append([]string{"bootstrap", "--profile", "apt-fixture", "--catalog", writeAptCatalog(t)}, tt.args...)
 			var stdout, stderr bytes.Buffer
 			if code := run(args, &stdout, &stderr); code != tt.wantCode {
 				t.Fatalf("exit code = %d, want %d; stdout=%q stderr=%q", code, tt.wantCode, stdout.String(), stderr.String())
@@ -1612,4 +1615,388 @@ func (r *recordingCommandRunner) RunCommand(_ context.Context, req execution.Com
 	r.calls = append(r.calls, req)
 	r.result.Request = req
 	return r.result
+}
+
+type sequenceCommandRunner struct {
+	results []execution.CommandResult
+	calls   []execution.CommandRequest
+}
+
+func (r *sequenceCommandRunner) RunCommand(_ context.Context, req execution.CommandRequest) execution.CommandResult {
+	r.calls = append(r.calls, req)
+	result := r.results[len(r.calls)-1]
+	result.Request = req
+	return result
+}
+
+func TestRunBootstrapHelp(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		args       []string
+		wantOutput string
+	}{
+		{
+			name:       "root help lists bootstrap",
+			args:       []string{"--help"},
+			wantOutput: "bootstrap  Execute an explicit selection through the safe apply workflow",
+		},
+		{
+			name:       "long command help explains explicit targets",
+			args:       []string{"bootstrap", "--help"},
+			wantOutput: "Usage: dbootstrap bootstrap [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo]]",
+		},
+		{
+			name:       "short command help explains explicit targets",
+			args:       []string{"bootstrap", "-h"},
+			wantOutput: "Usage: dbootstrap bootstrap [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo]]",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			originalDetect := detectEnvironmentFacts
+			detectEnvironmentFacts = func() planning.EnvironmentFacts {
+				t.Fatal("help must not detect the environment")
+				return planning.EnvironmentFacts{}
+			}
+			t.Cleanup(func() { detectEnvironmentFacts = originalDetect })
+
+			var stdout, stderr bytes.Buffer
+			if code := run(tt.args, &stdout, &stderr); code != exitSuccess {
+				t.Fatalf("exit code = %d, want %d; stdout=%q stderr=%q", code, exitSuccess, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stdout.String(), tt.wantOutput) {
+				t.Fatalf("stdout = %q, want it to contain %q", stdout.String(), tt.wantOutput)
+			}
+		})
+	}
+}
+
+func TestRunApplyHelpRetainsParserUsageFailure(t *testing.T) {
+	for _, alias := range []string{"-h", "--help"} {
+		t.Run(alias, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{"apply", alias}, &stdout, &stderr); code != exitUsage {
+				t.Fatalf("exit code = %d, want %d; stdout=%q stderr=%q", code, exitUsage, stdout.String(), stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout = %q, want empty", stdout.String())
+			}
+			if !strings.Contains(stderr.String(), "Usage of apply:") || !strings.Contains(stderr.String(), "Usage: dbootstrap apply") {
+				t.Fatalf("stderr = %q, want parser and command usage", stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunBootstrapMatchesApplyAcrossSafetyModes(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		flags          []string
+		wantExecutions int
+		wantExecutable string
+	}{
+		{name: "default", wantExecutions: 0},
+		{name: "dry run", flags: []string{"--dry-run"}, wantExecutions: 0},
+		{name: "confirmed", flags: []string{"--yes"}, wantExecutions: 1, wantExecutable: "apt-get"},
+		{name: "confirmed sudo", flags: []string{"--yes", "--sudo"}, wantExecutions: 1, wantExecutable: "sudo"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			catalogPath := writeAptCatalog(t)
+			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux"})
+			stubInstallationState(t, planning.InstallationState{})
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+			originalExists := aptCommandExists
+			aptCommandExists = func(name string) bool { return name == "apt-get" || name == "sudo" }
+			t.Cleanup(func() { aptCommandExists = originalExists })
+
+			outputs := make([]string, 0, 2)
+			codes := make([]int, 0, 2)
+			for _, command := range []string{"apply", "bootstrap"} {
+				runner := &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded}}
+				stubExecutionFactories(t, func() execution.CommandRunner { return runner }, newHomebrewInstaller, newDotfilesInstaller)
+				args := append([]string{command, "--profile", "apt-fixture", "--catalog", catalogPath}, tt.flags...)
+				var stdout, stderr bytes.Buffer
+				codes = append(codes, run(args, &stdout, &stderr))
+				outputs = append(outputs, stdout.String()+stderr.String())
+				if len(runner.calls) != tt.wantExecutions {
+					t.Fatalf("%s command calls = %#v, want %d", command, runner.calls, tt.wantExecutions)
+				}
+				if tt.wantExecutable != "" && runner.calls[0].Executable != tt.wantExecutable {
+					t.Fatalf("%s executable = %q, want %q", command, runner.calls[0].Executable, tt.wantExecutable)
+				}
+			}
+			if codes[0] != codes[1] {
+				t.Fatalf("apply exit = %d, bootstrap exit = %d", codes[0], codes[1])
+			}
+			if outputs[0] != outputs[1] {
+				t.Fatalf("apply output = %q, bootstrap output = %q", outputs[0], outputs[1])
+			}
+		})
+	}
+}
+
+func TestRunApplyLikeRejectsSyntacticInputBeforeProbing(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "missing target", args: nil, want: "--profile or --resource is required"},
+		{name: "malformed resource", args: []string{"--resource", "package"}, want: "expected kind:name"},
+		{name: "positional", args: []string{"--profile", "dev", "extra"}, want: "unexpected argument \"extra\""},
+		{name: "conflicting modes", args: []string{"--profile", "dev", "--dry-run", "--yes"}, want: "--dry-run and --yes cannot be combined"},
+		{name: "sudo requires confirmation", args: []string{"--profile", "dev", "--sudo"}, want: "--sudo requires --yes"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, command := range []string{"apply", "bootstrap"} {
+				t.Run(command, func(t *testing.T) {
+					originalDetect := detectEnvironmentFacts
+					detectEnvironmentFacts = func() planning.EnvironmentFacts {
+						t.Fatal("syntactic validation must not detect the environment")
+						return planning.EnvironmentFacts{}
+					}
+					t.Cleanup(func() { detectEnvironmentFacts = originalDetect })
+
+					var stdout, stderr bytes.Buffer
+					if code := run(append([]string{command}, tt.args...), &stdout, &stderr); code != exitUsage {
+						t.Fatalf("exit code = %d, want %d; stdout=%q stderr=%q", code, exitUsage, stdout.String(), stderr.String())
+					}
+					if !strings.Contains(stderr.String(), tt.want) {
+						t.Fatalf("stderr = %q, want it to contain %q", stderr.String(), tt.want)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestRunBootstrapMatchesApplyForUnknownProfile(t *testing.T) {
+	catalogPath := writeAptCatalog(t)
+	for _, command := range []string{"apply", "bootstrap"} {
+		t.Run(command, func(t *testing.T) {
+			calls := 0
+			originalDetect := detectEnvironmentFacts
+			detectEnvironmentFacts = func() planning.EnvironmentFacts {
+				calls++
+				return planning.EnvironmentFacts{OS: "linux"}
+			}
+			t.Cleanup(func() { detectEnvironmentFacts = originalDetect })
+			stubInstallationState(t, planning.InstallationState{})
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{command, "--profile", "unknown", "--catalog", catalogPath}, &stdout, &stderr); code != exitFailure {
+				t.Fatalf("exit code = %d, want %d; stdout=%q stderr=%q", code, exitFailure, stdout.String(), stderr.String())
+			}
+			if calls != 1 {
+				t.Fatalf("environment detection calls = %d, want 1", calls)
+			}
+			if !strings.Contains(stderr.String(), "unknown profile \"unknown\"") {
+				t.Fatalf("stderr = %q, want unknown profile diagnostic", stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunBootstrapMatchesApplyForUnknownResource(t *testing.T) {
+	catalogPath := writeAptCatalog(t)
+	outputs := make([]string, 0, 2)
+	codes := make([]int, 0, 2)
+	probes := make([]int, 0, 2)
+	for _, command := range []string{"apply", "bootstrap"} {
+		calls := 0
+		originalDetect := detectEnvironmentFacts
+		detectEnvironmentFacts = func() planning.EnvironmentFacts {
+			calls++
+			return planning.EnvironmentFacts{OS: "linux"}
+		}
+		t.Cleanup(func() { detectEnvironmentFacts = originalDetect })
+		stubInstallationState(t, planning.InstallationState{})
+		stubConfigState(t, planning.ConfigState{})
+		stubDotfilesState(t, planning.InstallationState{})
+
+		var stdout, stderr bytes.Buffer
+		codes = append(codes, run([]string{command, "--resource", "package:unknown", "--catalog", catalogPath}, &stdout, &stderr))
+		outputs = append(outputs, stdout.String()+stderr.String())
+		probes = append(probes, calls)
+	}
+	if codes[0] != exitFailure || codes[1] != exitFailure {
+		t.Fatalf("exit codes = %#v, want both %d", codes, exitFailure)
+	}
+	if outputs[0] != outputs[1] {
+		t.Fatalf("apply output = %q, bootstrap output = %q", outputs[0], outputs[1])
+	}
+	if probes[0] != 1 || probes[1] != 1 {
+		t.Fatalf("environment probes = %#v, want [1 1]", probes)
+	}
+	if !strings.Contains(outputs[1], "unknown resource package:unknown") {
+		t.Fatalf("stderr = %q, want unknown resource diagnostic", outputs[1])
+	}
+}
+
+func TestRunBootstrapMatchesApplyForPrerequisites(t *testing.T) {
+	tests := []struct {
+		name         string
+		catalogPath  func(t *testing.T) string
+		profile      string
+		facts        planning.EnvironmentFacts
+		configState  planning.ConfigState
+		wantCode     int
+		wantOutput   string
+		wantProbes   int
+		wantCommands int
+	}{
+		{
+			name:         "missing catalog",
+			catalogPath:  func(t *testing.T) string { return filepath.Join(t.TempDir(), "missing.toml") },
+			profile:      "dev",
+			wantCode:     exitFailure,
+			wantOutput:   "error: load catalog",
+			wantProbes:   0,
+			wantCommands: 0,
+		},
+		{
+			name:        "missing required config",
+			catalogPath: writePrimaryCatalog,
+			profile:     "dev",
+			facts:       planning.EnvironmentFacts{OS: "linux", Arch: "amd64"},
+			configState: planning.ConfigState{},
+			wantCode:    exitSuccess,
+			wantOutput:  "Execution Report",
+			wantProbes:  1,
+		},
+		{
+			name:        "environment mismatch",
+			catalogPath: writeLinuxOnlyCatalog,
+			profile:     "linux-only",
+			facts:       planning.EnvironmentFacts{OS: "darwin"},
+			configState: planning.ConfigState{},
+			wantCode:    exitSuccess,
+			wantOutput:  "No actionable steps were selected; nothing to apply.",
+			wantProbes:  1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			catalogPath := tt.catalogPath(t)
+			outputs := make([]string, 0, 2)
+			codes := make([]int, 0, 2)
+			probes := make([]int, 0, 2)
+			commands := make([]int, 0, 2)
+			for _, command := range []string{"apply", "bootstrap"} {
+				calls := 0
+				originalDetect := detectEnvironmentFacts
+				detectEnvironmentFacts = func() planning.EnvironmentFacts {
+					calls++
+					return tt.facts
+				}
+				t.Cleanup(func() { detectEnvironmentFacts = originalDetect })
+				stubInstallationState(t, planning.InstallationState{})
+				stubConfigState(t, tt.configState)
+				stubDotfilesState(t, planning.InstallationState{})
+				runner := &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded}}
+				stubExecutionFactories(t, func() execution.CommandRunner { return runner }, newHomebrewInstaller, newDotfilesInstaller)
+
+				var stdout, stderr bytes.Buffer
+				codes = append(codes, run([]string{command, "--profile", tt.profile, "--catalog", catalogPath}, &stdout, &stderr))
+				outputs = append(outputs, stdout.String()+stderr.String())
+				probes = append(probes, calls)
+				commands = append(commands, len(runner.calls))
+			}
+			if codes[0] != tt.wantCode || codes[1] != tt.wantCode {
+				t.Fatalf("exit codes = %#v, want both %d", codes, tt.wantCode)
+			}
+			if outputs[0] != outputs[1] {
+				t.Fatalf("apply output = %q, bootstrap output = %q", outputs[0], outputs[1])
+			}
+			if probes[0] != tt.wantProbes || probes[1] != tt.wantProbes {
+				t.Fatalf("environment probes = %#v, want both %d", probes, tt.wantProbes)
+			}
+			if commands[0] != tt.wantCommands || commands[1] != tt.wantCommands {
+				t.Fatalf("command calls = %#v, want both %d", commands, tt.wantCommands)
+			}
+			if !strings.Contains(outputs[1], tt.wantOutput) {
+				t.Fatalf("bootstrap output = %q, want %q", outputs[1], tt.wantOutput)
+			}
+		})
+	}
+}
+
+func TestRunBootstrapMatchesApplyForPartialFailure(t *testing.T) {
+	outputs := make([]string, 0, 2)
+	codes := make([]int, 0, 2)
+	for _, command := range []string{"apply", "bootstrap"} {
+		stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux"})
+		stubInstallationState(t, planning.InstallationState{})
+		stubConfigState(t, planning.ConfigState{})
+		stubDotfilesState(t, planning.InstallationState{})
+		originalExists := aptCommandExists
+		aptCommandExists = func(name string) bool { return name == "apt-get" }
+		t.Cleanup(func() { aptCommandExists = originalExists })
+		runner := &sequenceCommandRunner{results: []execution.CommandResult{
+			{Status: execution.CommandStatusSucceeded},
+			{Status: execution.CommandStatusFailed},
+		}}
+		stubExecutionFactories(t, func() execution.CommandRunner { return runner }, newHomebrewInstaller, newDotfilesInstaller)
+
+		var stdout, stderr bytes.Buffer
+		codes = append(codes, run([]string{command, "--profile", "two-apt", "--catalog", writeTwoAptCatalog(t), "--yes"}, &stdout, &stderr))
+		outputs = append(outputs, stdout.String()+stderr.String())
+	}
+	if codes[0] != exitFailure || codes[1] != exitFailure {
+		t.Fatalf("exit codes = %#v, want both %d", codes, exitFailure)
+	}
+	if outputs[0] != outputs[1] {
+		t.Fatalf("apply output = %q, bootstrap output = %q", outputs[0], outputs[1])
+	}
+	for _, output := range outputs {
+		first := strings.Index(output, "package:first [changed]")
+		second := strings.Index(output, "package:second [failed]")
+		if first < 0 || second < 0 || first >= second {
+			t.Fatalf("partial report = %q, want package:first [changed] before package:second [failed]", output)
+		}
+	}
+}
+
+func writeTwoAptCatalog(t *testing.T) string {
+	t.Helper()
+	return writeFile(t, t.TempDir(), "two-apt.toml", `schema = "dniebles.catalog"
+version = 1
+
+[[packages]]
+id = "first"
+description = "First APT fixture"
+[packages.install]
+provider = "apt"
+package = "first"
+
+[[packages]]
+id = "second"
+description = "Second APT fixture"
+[packages.install]
+provider = "apt"
+package = "second"
+
+[[profiles]]
+id = "two-apt"
+resources = ["package:first", "package:second"]
+`)
+}
+
+func writeLinuxOnlyCatalog(t *testing.T) string {
+	t.Helper()
+	return writeFile(t, t.TempDir(), "linux-only.toml", `schema = "dniebles.catalog"
+version = 1
+
+[[packages]]
+id = "linux-only"
+description = "Linux-only fixture"
+os = ["linux"]
+
+[[profiles]]
+id = "linux-only"
+resources = ["package:linux-only"]
+`)
 }

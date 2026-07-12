@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 
 	catalogtoml "github.com/dnieblesdev/dniebles-bootstrap/internal/catalog/toml"
@@ -41,7 +42,7 @@ var (
 	detectConfigState       = config.Detect
 	detectDotfilesState     = dotfiles.Detect
 	brewCommandExists       = execution.BrewCommandExists
-	aptCommandExists        = execution.BrewCommandExists
+	aptCommandExists        = aptCommandExistsOnPath
 	newOSCommandRunner      = func() execution.CommandRunner { return execution.NewOSCommandRunner() }
 	newHomebrewInstaller    = func(kind planning.ResourceKind, runner execution.CommandRunner, exists execution.CommandExists) execution.Installer {
 		return execution.NewHomebrewInstaller(kind, runner, exists)
@@ -54,6 +55,11 @@ var (
 		return execution.NewDotfilesInstaller(provider)
 	}
 )
+
+func aptCommandExistsOnPath(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
 
 // resourceFlag accumulates repeated --resource values.
 type resourceFlag struct {
@@ -82,6 +88,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runPlan(args[1:], stdout, stderr)
 	case "apply":
 		return runApply(args[1:], stdout, stderr)
+	case "bootstrap":
+		return runApplyLike("bootstrap", args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		printUsage(stdout)
 		return exitSuccess
@@ -113,7 +121,16 @@ func runPlan(args []string, stdout, stderr io.Writer) int {
 }
 
 func runApply(args []string, stdout, stderr io.Writer) int {
-	request, catalogPath, mode, ok := parseApplyFlags(args, stderr)
+	return runApplyLike("apply", args, stdout, stderr)
+}
+
+func runApplyLike(command string, args []string, stdout, stderr io.Writer) int {
+	if command == "bootstrap" && isHelpRequest(args) {
+		printApplyLikeUsage(command, stdout)
+		return exitSuccess
+	}
+
+	request, catalogPath, mode, ok := parseApplyLikeFlags(command, args, stderr)
 	if !ok {
 		return exitUsage
 	}
@@ -281,7 +298,11 @@ func (i missingHomebrewInstaller) Install(_ context.Context, step planning.PlanS
 // surface. It validates that conflicting safety flags are not combined and
 // returns the selected apply mode along with the plan request.
 func parseApplyFlags(args []string, stderr io.Writer) (planning.PlanRequest, string, applyMode, bool) {
-	flags := flag.NewFlagSet("apply", flag.ContinueOnError)
+	return parseApplyLikeFlags("apply", args, stderr)
+}
+
+func parseApplyLikeFlags(command string, args []string, stderr io.Writer) (planning.PlanRequest, string, applyMode, bool) {
+	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 
 	profile := flags.String("profile", "", "profile name to plan")
@@ -293,36 +314,36 @@ func parseApplyFlags(args []string, stderr io.Writer) (planning.PlanRequest, str
 	sudo := flags.Bool("sudo", false, "use sudo for confirmed APT installation")
 
 	if err := flags.Parse(args); err != nil {
-		printApplyUsage(stderr)
+		printApplyLikeUsage(command, stderr)
 		return planning.PlanRequest{}, "", "", false
 	}
 	if flags.NArg() > 0 {
-		printApplyUsage(stderr)
+		printApplyLikeUsage(command, stderr)
 		fmt.Fprintf(stderr, "error: unexpected argument %q\n", flags.Arg(0))
 		return planning.PlanRequest{}, "", "", false
 	}
 
 	if *dryRun && *yes {
-		printApplyUsage(stderr)
+		printApplyLikeUsage(command, stderr)
 		fmt.Fprintln(stderr, "error: --dry-run and --yes cannot be combined")
 		return planning.PlanRequest{}, "", "", false
 	}
 	if *sudo && !*yes {
-		printApplyUsage(stderr)
+		printApplyLikeUsage(command, stderr)
 		fmt.Fprintln(stderr, "error: --sudo requires --yes")
 		return planning.PlanRequest{}, "", "", false
 	}
 
 	resourceRefs, err := parseResourceRefs(resources.values)
 	if err != nil {
-		printApplyUsage(stderr)
+		printApplyLikeUsage(command, stderr)
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return planning.PlanRequest{}, "", "", false
 	}
 	resourceRefs = dedupeResourceRefs(resourceRefs)
 
 	if *profile == "" && len(resourceRefs) == 0 {
-		printApplyUsage(stderr)
+		printApplyLikeUsage(command, stderr)
 		fmt.Fprintln(stderr, "error: --profile or --resource is required")
 		return planning.PlanRequest{}, "", "", false
 	}
@@ -434,12 +455,13 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  plan    Build a deterministic plan for a profile")
 	fmt.Fprintln(w, "  apply   Execute safely; --yes may run eligible brew-backed installs, eligible Linux APT installs, and selected dotfiles")
 	fmt.Fprintln(w, "          APT uses apt-get directly with --yes, or sudo apt-get only with --yes --sudo")
+	fmt.Fprintln(w, "  bootstrap  Execute an explicit selection through the safe apply workflow")
 }
 
 func printCommandUsage(command string, w io.Writer) {
 	switch command {
-	case "apply":
-		printApplyUsage(w)
+	case "apply", "bootstrap":
+		printApplyLikeUsage(command, w)
 	default:
 		printPlanUsage(w)
 	}
@@ -450,7 +472,18 @@ func printPlanUsage(w io.Writer) {
 }
 
 func printApplyUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo]]")
+	printApplyLikeUsage("apply", w)
+}
+
+func printApplyLikeUsage(command string, w io.Writer) {
+	fmt.Fprintf(w, "Usage: dbootstrap %s [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo]]\n", command)
+	if command == "bootstrap" {
+		fmt.Fprintln(w, "Select at least one --profile or --resource. Default and --dry-run do not mutate; --yes confirms eligible work and --sudo requires --yes.")
+	}
+}
+
+func isHelpRequest(args []string) bool {
+	return len(args) == 1 && (args[0] == "-h" || args[0] == "--help")
 }
 
 func parseResourceRef(value string) (planning.ResourceRef, error) {
