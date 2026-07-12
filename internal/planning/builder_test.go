@@ -230,6 +230,28 @@ func TestBuildPlanInstallationStatePrecedence(t *testing.T) {
 	}
 }
 
+func TestBuildPlanCarriesResultStatusOnOrderedSteps(t *testing.T) {
+	result := BuildPlan(
+		Catalog{Resources: map[ResourceRef]Resource{
+			toolGit:    {Ref: toolGit},
+			runtimeGo:  {Ref: runtimeGo, ConfigPolicy: ConfigPolicy{RequiredKeys: []string{"go.env"}}},
+			packageRip: {Ref: packageRip},
+		}},
+		PlanRequest{Resources: []ResourceRef{toolGit, runtimeGo, packageRip}},
+		EnvironmentFacts{}, ConfigState{},
+		InstallationState{PresentResources: map[ResourceRef]bool{toolGit: true}},
+	)
+	results := map[ResourceRef]PlanStepStatus{}
+	for _, item := range result.Results {
+		results[item.Ref] = item.Status
+	}
+	for _, step := range result.Plan.Steps {
+		if step.Status != results[step.Ref] {
+			t.Fatalf("step %v status = %q, want result status %q", step.Ref, step.Status, results[step.Ref])
+		}
+	}
+}
+
 func TestBuildPlanDotfilePresenceUsesInstallationState(t *testing.T) {
 	catalog := Catalog{
 		Resources: map[ResourceRef]Resource{

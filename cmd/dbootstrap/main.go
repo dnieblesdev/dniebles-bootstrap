@@ -148,7 +148,14 @@ func runApplyLike(command string, args []string, stdout, stderr io.Writer) int {
 	}
 
 	runner := buildApplyRunner(mode, facts, result.Plan)
-	report := runner.Run(context.Background(), result.Plan)
+	executionPlan := result.Plan
+	if !isConfirmedMode(mode) {
+		executionPlan.Steps = append([]planning.PlanStep(nil), result.Plan.Steps...)
+		for index := range executionPlan.Steps {
+			executionPlan.Steps[index].Status = ""
+		}
+	}
+	report := runner.Run(context.Background(), executionPlan)
 	report = appendApplyBootstrap(report, result.Plan)
 	renderExecutionReport(stdout, mode, report)
 	if isConfirmedMode(mode) && hasFailedExecutionResult(report) {

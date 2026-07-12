@@ -881,6 +881,80 @@ resources = ["tool:fd", "dotfile:bash"]
 	}
 }
 
+func TestRunApplyAndBootstrapSkipDetectedCommandPresence(t *testing.T) {
+	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `schema = "dniebles.catalog"
+version = 1
+
+[[tools]]
+id = "editor"
+description = "Editor"
+[tools.install]
+provider = "brew"
+package = "vim"
+[tools.presence]
+kind = "command_exists"
+name = "vim"
+
+[[profiles]]
+id = "dev"
+resources = ["tool:editor"]
+`)
+	for _, command := range []string{"apply", "bootstrap"} {
+		t.Run(command, func(t *testing.T) {
+			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+			stubInstallationState(t, planning.InstallationState{PresentResources: map[planning.ResourceRef]bool{{Kind: planning.ResourceKindTool, Name: "editor"}: true}})
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+			stubBrewCommandExists(t, true)
+			runner := &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded}}
+			stubExecutionFactories(t, func() execution.CommandRunner { return runner }, newHomebrewInstaller, newDotfilesInstaller)
+
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{command, "--profile", "dev", "--catalog", catalogPath, "--yes"}, &stdout, &stderr); code != exitSuccess {
+				t.Fatalf("exit code = %d, want %d; stdout=%q stderr=%q", code, exitSuccess, stdout.String(), stderr.String())
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("command calls = %#v, want none", runner.calls)
+			}
+			if !strings.Contains(stdout.String(), "tool:editor [unchanged] already installed; no mutation attempted") {
+				t.Fatalf("stdout missing idempotent result: %q", stdout.String())
+			}
+		})
+	}
+}
+
+func TestRunApplySafeModesDoNotReportConfirmedIdempotencySkip(t *testing.T) {
+	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `schema = "dniebles.catalog"
+version = 1
+
+[[tools]]
+id = "editor"
+description = "Editor"
+[tools.presence]
+kind = "command_exists"
+name = "vim"
+
+[[profiles]]
+id = "dev"
+resources = ["tool:editor"]
+`)
+	for _, args := range [][]string{{"apply", "--profile", "dev", "--catalog", catalogPath}, {"apply", "--profile", "dev", "--catalog", catalogPath, "--dry-run"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+			stubInstallationState(t, planning.InstallationState{PresentResources: map[planning.ResourceRef]bool{{Kind: planning.ResourceKindTool, Name: "editor"}: true}})
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+			var stdout, stderr bytes.Buffer
+			if code := run(args, &stdout, &stderr); code != exitSuccess {
+				t.Fatalf("exit code = %d, want %d", code, exitSuccess)
+			}
+			if strings.Contains(stdout.String(), "already installed; no mutation attempted") || !strings.Contains(stdout.String(), "tool:editor [not supported yet]") {
+				t.Fatalf("safe-mode output = %q, want existing non-mutating report", stdout.String())
+			}
+		})
+	}
+}
+
 func TestRunApplyConfirmedBrewPresentUsesInjectedRunnerForBrewOnly(t *testing.T) {
 	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `
 schema = "dniebles.catalog"

@@ -107,6 +107,8 @@ type PlanStep struct {
 	Resource         Resource
 	DependsOn        []ResourceRef
 	AttentionReasons []string
+	// Status carries the planning-time status for this ordered executable step.
+	Status PlanStepStatus
 }
 
 // PlanResult returns the plan plus structured planning-time statuses.

@@ -24,8 +24,8 @@ func TestDetectorDetect(t *testing.T) {
 			name: "marks tool and runtime refs present when lookup succeeds",
 			catalog: planning.Catalog{
 				Resources: map[planning.ResourceRef]planning.Resource{
-					toolGit:    {Ref: toolGit},
-					runtimeGo:  {Ref: runtimeGo},
+					toolGit:    {Ref: toolGit, Presence: &planning.PresenceMetadata{Kind: "command_exists", Name: "git"}},
+					runtimeGo:  {Ref: runtimeGo, Presence: &planning.PresenceMetadata{Kind: "command_exists", Name: "go"}},
 					packageRip: {Ref: packageRip},
 					dotShell:   {Ref: dotShell},
 				},
@@ -74,6 +74,43 @@ func TestDetectorDetect(t *testing.T) {
 				t.Fatalf("Detect() = %#v, want %#v", got, want)
 			}
 		})
+	}
+}
+
+func TestDetectorDetectUsesOnlyConfiguredEligibleCommandPresence(t *testing.T) {
+	tool := planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "editor"}
+	runtime := planning.ResourceRef{Kind: planning.ResourceKindRuntime, Name: "go"}
+	packageRef := planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "ripgrep"}
+	dotfile := planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "shell"}
+
+	catalog := planning.Catalog{Resources: map[planning.ResourceRef]planning.Resource{
+		tool:       {Ref: tool, Presence: &planning.PresenceMetadata{Kind: "command_exists", Name: "vim"}},
+		runtime:    {Ref: runtime, Presence: &planning.PresenceMetadata{Kind: "command_exists", Name: "go"}},
+		packageRef: {Ref: packageRef, Presence: &planning.PresenceMetadata{Kind: "command_exists", Name: "rg"}},
+		dotfile:    {Ref: dotfile, Presence: &planning.PresenceMetadata{Kind: "command_exists", Name: "shell"}},
+		{Kind: planning.ResourceKindTool, Name: "missing"}:  {Presence: nil},
+		{Kind: planning.ResourceKindRuntime, Name: "empty"}: {Presence: &planning.PresenceMetadata{Kind: "command_exists"}},
+		{Kind: planning.ResourceKindTool, Name: "other"}:    {Presence: &planning.PresenceMetadata{Kind: "path", Name: "other"}},
+	}}
+	var lookups []string
+	got := Detector{LookPath: func(name string) (string, error) {
+		lookups = append(lookups, name)
+		if name == "vim" || name == "go" {
+			return "/usr/bin/" + name, nil
+		}
+		return "", errors.New("not found")
+	}}.Detect(catalog)
+
+	want := map[planning.ResourceRef]bool{tool: true, runtime: true}
+	if !reflect.DeepEqual(got.PresentResources, want) {
+		t.Fatalf("present resources = %#v, want %#v", got.PresentResources, want)
+	}
+	lookupSet := make(map[string]bool, len(lookups))
+	for _, lookup := range lookups {
+		lookupSet[lookup] = true
+	}
+	if len(lookups) != 2 || len(lookupSet) != 2 || !lookupSet["vim"] || !lookupSet["go"] {
+		t.Fatalf("lookups = %#v, want each configured eligible name exactly once", lookups)
 	}
 }
 

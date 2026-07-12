@@ -89,6 +89,40 @@ func TestRunnerDispatchesSequentiallyByKind(t *testing.T) {
 	}
 }
 
+func TestRunnerSkipsOnlyEligibleAlreadyInstalledSteps(t *testing.T) {
+	tool := planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "vim"}
+	runtime := planning.ResourceRef{Kind: planning.ResourceKindRuntime, Name: "go"}
+	packageRef := planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "vim"}
+	installer := &fakeInstaller{kind: planning.ResourceKindTool}
+	runtimeInstaller := &fakeInstaller{kind: planning.ResourceKindRuntime}
+	packageInstaller := &fakeInstaller{kind: planning.ResourceKindPackage}
+	runner := NewRunner(installer, runtimeInstaller, packageInstaller)
+	validPresence := &planning.PresenceMetadata{Kind: "command_exists", Name: "vim"}
+	report := runner.Run(context.Background(), planning.Plan{Steps: []planning.PlanStep{
+		{Ref: tool, Resource: planning.Resource{Ref: tool, Presence: validPresence}, Status: planning.PlanStepStatusAlreadyInstalled},
+		{Ref: runtime, Resource: planning.Resource{Ref: runtime, Presence: &planning.PresenceMetadata{Kind: "command_exists", Name: "go"}}, Status: planning.PlanStepStatusAlreadyInstalled},
+		{Ref: tool, Resource: planning.Resource{Ref: tool}, Status: planning.PlanStepStatusAlreadyInstalled},
+		{Ref: packageRef, Resource: planning.Resource{Ref: packageRef, Presence: validPresence}, Status: planning.PlanStepStatusAlreadyInstalled},
+	}})
+	if got, want := len(report.Results), 4; got != want {
+		t.Fatalf("result count = %d, want %d", got, want)
+	}
+	for _, index := range []int{0, 1} {
+		if got := report.Results[index]; got.Status != StepStatusSkipped || got.Message != "already installed; no mutation attempted" {
+			t.Fatalf("result[%d] = %#v, want idempotent skip", index, got)
+		}
+	}
+	if got, want := len(installer.calls), 1; got != want {
+		t.Fatalf("tool installer calls = %d, want %d for invalid metadata", got, want)
+	}
+	if got, want := len(runtimeInstaller.calls), 0; got != want {
+		t.Fatalf("runtime installer calls = %d, want %d", got, want)
+	}
+	if got, want := len(packageInstaller.calls), 1; got != want {
+		t.Fatalf("package installer calls = %d, want %d", got, want)
+	}
+}
+
 func TestRunnerContinuesOnMissingInstaller(t *testing.T) {
 	toolInst := &fakeInstaller{
 		kind: planning.ResourceKindTool,

@@ -27,11 +27,12 @@ func (d Detector) Detect(catalog planning.Catalog) planning.InstallationState {
 	}
 
 	present := map[planning.ResourceRef]bool{}
-	for ref := range catalog.Resources {
-		if !isDetectableKind(ref.Kind) {
+	for ref, resource := range catalog.Resources {
+		if !isDetectableKind(ref.Kind) || resource.Presence == nil ||
+			resource.Presence.Kind != "command_exists" || resource.Presence.Name == "" {
 			continue
 		}
-		if _, err := lookup(ref.Name); err == nil {
+		if _, err := lookup(resource.Presence.Name); err == nil {
 			present[ref] = true
 		}
 	}

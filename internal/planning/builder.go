@@ -122,6 +122,7 @@ func (b *planBuilder) appendOrderedSteps() {
 			Resource:         resource,
 			DependsOn:        sortedRefs(resource.DependsOn),
 			AttentionReasons: reasons,
+			Status:           status,
 		}
 		b.steps = append(b.steps, step)
 		b.record(PlanStepResult{Ref: ref, Status: status, Reasons: reasons})

@@ -27,6 +27,14 @@ func NewRunner(installers ...Installer) *Runner {
 func (r *Runner) Run(ctx context.Context, plan planning.Plan) ExecutionReport {
 	report := ExecutionReport{Results: make([]StepResult, 0, len(plan.Steps))}
 	for _, step := range plan.Steps {
+		if isAlreadyInstalledCommandStep(step) {
+			report.Results = append(report.Results, StepResult{
+				Ref:     step.Ref,
+				Status:  StepStatusSkipped,
+				Message: "already installed; no mutation attempted",
+			})
+			continue
+		}
 		inst, ok := r.installers[step.Ref.Kind]
 		if !ok {
 			report.Results = append(report.Results, StepResult{
@@ -39,4 +47,11 @@ func (r *Runner) Run(ctx context.Context, plan planning.Plan) ExecutionReport {
 		report.Results = append(report.Results, inst.Install(ctx, step))
 	}
 	return report
+}
+
+func isAlreadyInstalledCommandStep(step planning.PlanStep) bool {
+	presence := step.Resource.Presence
+	return step.Status == planning.PlanStepStatusAlreadyInstalled &&
+		(step.Ref.Kind == planning.ResourceKindTool || step.Ref.Kind == planning.ResourceKindRuntime) &&
+		presence != nil && presence.Kind == "command_exists" && presence.Name != ""
 }

@@ -4,21 +4,59 @@
 
 ## Current status
 
-This repository has its first pure Go planning-core slice, an isolated TOML catalog adapter, and a minimal CLI plan command. It accepts decoded domain inputs and builds deterministic plans without installers, command execution, dotfiles runtime integration, or TUI wiring. Planning remains pure; host probing is performed by read-only adapters at the CLI composition root.
+This repository provides a domain-first Go CLI for deterministic planning and explicitly confirmed execution. Planning remains pure; host probing is performed by read-only adapters at the CLI composition root.
 
-- Go application code currently includes `internal/planning` domain/value types, a pure plan builder, the `internal/catalog/toml` adapter, `cmd/dbootstrap` plan command wiring, and table-driven unit/integration tests.
+- Go application code includes planning, catalog decoding, execution reporting, provider-aware installers, and table-driven unit/integration tests.
 - A repository-local TOML catalog fixture exists at `catalog/bootstrap.toml`; it decodes into planning inputs while planner-owned semantics remain in `internal/planning`.
 - The accepted direction is captured under `openspec/changes/archive/2026-07-03-design-bootstrap-orchestrator/`, `openspec/changes/first-go-planning-slice/`, and `openspec/changes/catalog-toml-adapter/`.
 
 ## CLI usage
 
-Build or run the current CLI from the repository root:
+Run the CLI from the repository root. The default catalog is `catalog/bootstrap.toml`; use `--catalog <path>` for another local catalog.
 
-```sh
-go run ./cmd/dbootstrap plan --profile dev
-```
+## Operational workflow
 
-The command loads `catalog/bootstrap.toml` by default. Use `--catalog <path>` to point at another local TOML catalog file. The plan command detects host environment facts (OS, architecture, Linux distro, and WSL status), inspects local dotfiles config presence read-only, and passes detected state to planning; it does not apply/install anything.
+### Quick path
+
+1. Inspect selected work: `go run ./cmd/dbootstrap plan --profile dev`.
+2. Review non-mutating reporting: `go run ./cmd/dbootstrap apply --profile dev` or add `--dry-run`.
+3. Confirm eligible execution deliberately: `go run ./cmd/dbootstrap apply --profile dev --yes`.
+
+Select targets with `--profile <name>`, repeatable `--resource <kind:name>`, and `--catalog <path>`. `bootstrap` accepts the same target and safety flags and uses the same execution workflow as `apply`.
+
+### Commands and safety modes
+
+| Command or flag | Behavior |
+|---|---|
+| `plan` | Inspects the selected work and renders planning statuses; it does not mutate the host. |
+| `apply` | Reports execution results by default; only `--yes` confirms eligible execution. |
+| `bootstrap` | Uses the same apply execution semantics for an explicit selection; provider/bootstrap needs remain advisory. |
+| `--dry-run` | Reports the dry-run mode without mutation. It cannot be combined with `--yes`. |
+| `--yes` | Explicitly confirms supported eligible execution. Default and dry-run modes do not mutate the host. |
+| `--sudo` | Is meaningful only with confirmed `--yes` where the provider supports it; it does not independently enable mutation. |
+
+### Confirmed reruns
+
+A confirmed `apply --yes` or `bootstrap --yes` avoids installer mutation only when planning has marked an eligible `tool` or `runtime` as `already_installed` after reliable configured-command detection. The resource must have non-nil presence metadata with `Presence.Kind == "command_exists"` and a non-empty `Presence.Name`. The result is reported as `unchanged`: `already installed; no mutation attempted`.
+
+This is intentionally narrow. Package and dotfile resources keep their normal runner behavior. Command presence is not proof of package installation details, package version, configuration correctness, or dotfile-link convergence; dotfile module presence does not prove links are current.
+
+### Results and recovery
+
+Reports keep the original plan order, including mixed results:
+
+| Result | Meaning |
+|---|---|
+| `changed` | The eligible confirmed action completed. |
+| `unchanged` | No action was needed or mutation was not attempted. |
+| `not supported yet` | The selected action has no supported execution path in this mode. |
+| `failed` | The action failed; confirmed eligible failures produce a non-zero result. |
+
+Execution continues according to existing behavior after a non-terminal step failure. Fix the reported cause, then rerun deliberately. This workflow performs no automatic retry or rollback.
+
+### Advisory bootstrap boundary
+
+When a required provider or bootstrap dependency is missing, bootstrap output is manual/advisory guidance only. This workflow does not clone, fetch, install, retry, or otherwise acquire that dependency automatically.
 
 ## Goals and non-goals
 
@@ -34,7 +72,7 @@ The command loads `catalog/bootstrap.toml` by default. Use `--catalog <path>` to
 |----------|----------|
 | Dotfiles internals | `~/.dotfiles` owns modules, configs, assets, symlinks, validations, and `dotlink` semantics. |
 | Shell orchestration | A shell wrapper may acquire `dbootstrap`, but it must not resolve catalogs, run installers, or own reporting. |
-| Runtime execution in this slice | This change does not add installers, apply/install commands, command runners, or runtime mutation. |
+| Automatic convergence | Confirmed execution is explicit and limited; it does not provide package/version/configuration reconciliation or general idempotency. |
 
 ## Install flows
 
