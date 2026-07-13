@@ -39,7 +39,7 @@ Select targets with `--profile <name>`, repeatable `--resource <kind:name>`, and
 
 A confirmed `apply --yes` or `bootstrap --yes` avoids installer mutation only when planning has marked an eligible `tool` or `runtime` as `already_installed` after reliable configured-command detection. The resource must have non-nil presence metadata with `Presence.Kind == "command_exists"` and a non-empty `Presence.Name`. The result is reported as `unchanged`: `already installed; no mutation attempted`.
 
-This is intentionally narrow. Package and dotfile resources keep their normal runner behavior. Command presence is not proof of package installation details, package version, configuration correctness, or dotfile-link convergence; dotfile module presence does not prove links are current.
+This is intentionally narrow. In confirmed mode only, an eligible Brew package may also be unchanged after the exact read-only query `brew list --formula <InstallMetadata.Package>` positively proves its formula is installed. The result is `already installed; no mutation attempted`. A missing Brew executable, timeout, failed or ambiguous query is reported as failed and never authorizes installation. Default and dry-run modes do not perform this probe. APT packages, casks, versions, configuration, and dotfiles keep their normal behavior.
 
 ### Results and recovery
 

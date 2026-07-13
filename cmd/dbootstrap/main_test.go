@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -579,25 +580,25 @@ func TestRunApplyCommand(t *testing.T) {
 			wantStderr: "",
 		},
 		{
-			name:              "yes flag renders confirmed mode with missing brew guidance",
+			name:              "yes flag reports unknown package presence when brew is missing",
 			args:              []string{"apply", "--profile", "dev", "--catalog", "../../catalog/bootstrap.toml", "--yes"},
 			installationState: planning.InstallationState{},
 			configState:       planning.ConfigState{},
-			wantCode:          exitSuccess,
+			wantCode:          exitFailure,
 			wantStdout: "Execution Report\n" +
 				"Mode: confirmed\n" +
 				"Confirmed mode: brew-backed tool/package steps, eligible Linux APT-backed tool/package steps, and selected dotfile resources may have changed this machine; unsupported, non-provider-backed, and unselected steps remain non-mutating or not supported yet.\n" +
 				"\n" +
 				"Summary:\n" +
 				"- changed: 0\n" +
-				"- unchanged: 3\n" +
+				"- unchanged: 1\n" +
 				"- not supported yet: 1\n" +
-				"- failed: 0\n" +
+				"- failed: 2\n" +
 				"\n" +
 				"Steps:\n" +
 				"1. tool:git [unchanged] skipped because Homebrew must be installed manually before brew-backed resources can be applied\n" +
-				"2. package:jq [unchanged] skipped because Homebrew must be installed manually before brew-backed resources can be applied\n" +
-				"3. package:ripgrep [unchanged] skipped because Homebrew must be installed manually before brew-backed resources can be applied\n" +
+				"2. package:jq [failed] Homebrew formula presence could not be determined; no mutation attempted\n" +
+				"3. package:ripgrep [failed] Homebrew formula presence could not be determined; no mutation attempted\n" +
 				"4. runtime:go [not supported yet] noop installer does not perform real installation\n" +
 				"\n" +
 				"Manual Actions:\n" +
@@ -845,7 +846,16 @@ resources = ["tool:fd", "dotfile:bash"]
 			stubInstallationState(t, planning.InstallationState{})
 			stubConfigState(t, planning.ConfigState{})
 			stubDotfilesState(t, planning.InstallationState{})
-			stubBrewCommandExists(t, false)
+			brewLookups := 0
+			originalBrew := brewCommandExists
+			brewCommandExists = func(name string) bool {
+				brewLookups++
+				if name != "brew" {
+					t.Fatalf("expected lookup for brew, got %q", name)
+				}
+				return false
+			}
+			t.Cleanup(func() { brewCommandExists = originalBrew })
 			stubExecutionFactories(t,
 				func() execution.CommandRunner {
 					t.Fatal("safe modes must not instantiate OS command runners")
@@ -868,6 +878,9 @@ resources = ["tool:fd", "dotfile:bash"]
 			if gotCode != exitSuccess {
 				t.Fatalf("run() exit code = %d, want %d", gotCode, exitSuccess)
 			}
+			if args[0] == "apply" && brewLookups != 1 {
+				t.Fatalf("Homebrew lookups = %d, want only bootstrap availability check", brewLookups)
+			}
 			if strings.Contains(stdout.String(), "installed fd") {
 				t.Fatalf("safe mode output reported install: %q", stdout.String())
 			}
@@ -875,6 +888,48 @@ resources = ["tool:fd", "dotfile:bash"]
 				t.Fatalf("safe apply did not keep dotfile resource not supported: %q", stdout.String())
 			}
 			if stderr.String() != "" {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunBootstrapDefaultAndDryRunDoNotProbeBrew(t *testing.T) {
+	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `
+schema = "dniebles.catalog"
+version = 1
+
+[[packages]]
+id = "ripgrep"
+description = "Fast text search"
+[packages.install]
+provider = "brew"
+package = "ripgrep"
+
+[[profiles]]
+id = "dev"
+resources = ["package:ripgrep"]
+`)
+
+	for _, flags := range [][]string{nil, {"--dry-run"}} {
+		t.Run(strings.Join(append([]string{"default"}, flags...), " "), func(t *testing.T) {
+			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+			stubInstallationState(t, planning.InstallationState{})
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+			originalBrew := brewCommandExists
+			brewCommandExists = func(name string) bool {
+				t.Fatalf("bootstrap default and dry-run modes must not probe %q", name)
+				return false
+			}
+			t.Cleanup(func() { brewCommandExists = originalBrew })
+
+			var stdout, stderr bytes.Buffer
+			args := append([]string{"bootstrap", "--profile", "dev", "--catalog", catalogPath}, flags...)
+			if code := run(args, &stdout, &stderr); code != exitSuccess {
+				t.Fatalf("exit code = %d, want %d; stdout=%q stderr=%q", code, exitSuccess, stdout.String(), stderr.String())
+			}
+			if stderr.Len() != 0 {
 				t.Fatalf("stderr = %q, want empty", stderr.String())
 			}
 		})
@@ -1274,7 +1329,7 @@ func TestRunApplyConfirmedDotfilesFailuresExitNonZero(t *testing.T) {
 	}
 }
 
-func TestRunApplyConfirmedMissingBrewDoesNotInstantiateHomebrewInstaller(t *testing.T) {
+func TestRunApplyConfirmedMissingBrewReportsUnknownWithoutInstantiatingHomebrewInstaller(t *testing.T) {
 	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `
 schema = "dniebles.catalog"
 version = 1
@@ -1314,12 +1369,12 @@ resources = ["package:ripgrep"]
 	var stderr bytes.Buffer
 	gotCode := run([]string{"apply", "--profile", "dev", "--catalog", catalogPath, "--yes"}, &stdout, &stderr)
 
-	if gotCode != exitSuccess {
-		t.Fatalf("run() exit code = %d, want %d", gotCode, exitSuccess)
+	if gotCode != exitFailure {
+		t.Fatalf("run() exit code = %d, want %d", gotCode, exitFailure)
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "package:ripgrep [unchanged]") || !strings.Contains(out, "homebrew:bootstrap: Install Homebrew") {
-		t.Fatalf("stdout missing skipped install or bootstrap guidance: %q", out)
+	if !strings.Contains(out, "package:ripgrep [failed] Homebrew formula presence could not be determined; no mutation attempted") || !strings.Contains(out, "homebrew:bootstrap: Install Homebrew") {
+		t.Fatalf("stdout missing unknown-presence result or bootstrap guidance: %q", out)
 	}
 	if stderr.String() != "" {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
@@ -1618,6 +1673,62 @@ func writeFile(t *testing.T, dir, name, content string) string {
 		t.Fatalf("write fixture: %v", err)
 	}
 	return path
+}
+
+func TestConfirmedCommandsCheckBrewFormulaBeforeInstall(t *testing.T) {
+	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `
+schema = "dniebles.catalog"
+version = 1
+
+[[packages]]
+id = "json-tool"
+description = "JSON processor"
+[packages.install]
+provider = "brew"
+package = "jq"
+
+[[profiles]]
+id = "dev"
+resources = ["package:json-tool"]
+`)
+	stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "darwin", Arch: "arm64"})
+	stubInstallationState(t, planning.InstallationState{})
+	stubConfigState(t, planning.ConfigState{})
+	stubDotfilesState(t, planning.InstallationState{})
+	stubBrewCommandExists(t, true)
+	tests := []struct {
+		name    string
+		command string
+		results []execution.CommandResult
+		code    int
+		calls   []execution.CommandRequest
+		output  string
+	}{
+		{"apply installed", "apply", []execution.CommandResult{{Status: execution.CommandStatusSucceeded}}, exitSuccess, []execution.CommandRequest{{Executable: "brew", Args: []string{"list", "--formula", "jq"}, Timeout: 30 * time.Second}}, "already installed; no mutation attempted"},
+		{"bootstrap installed", "bootstrap", []execution.CommandResult{{Status: execution.CommandStatusSucceeded}}, exitSuccess, []execution.CommandRequest{{Executable: "brew", Args: []string{"list", "--formula", "jq"}, Timeout: 30 * time.Second}}, "already installed; no mutation attempted"},
+		{"apply explicitly absent", "apply", []execution.CommandResult{{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "Error: No such keg: jq", Err: errors.New("exit 1")}, {Status: execution.CommandStatusSucceeded}}, exitSuccess, []execution.CommandRequest{{Executable: "brew", Args: []string{"list", "--formula", "jq"}, Timeout: 30 * time.Second}, {Executable: "brew", Args: []string{"install", "jq"}}}, "installed jq"},
+		{"apply timed out", "apply", []execution.CommandResult{{Status: execution.CommandStatusTimedOut, Err: context.DeadlineExceeded}}, exitFailure, []execution.CommandRequest{{Executable: "brew", Args: []string{"list", "--formula", "jq"}, Timeout: 30 * time.Second}}, "presence could not be determined; no mutation attempted"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &sequenceCommandRunner{results: tt.results}
+			stubExecutionFactories(t, func() execution.CommandRunner { return runner }, func(kind planning.ResourceKind, commandRunner execution.CommandRunner, exists execution.CommandExists) execution.Installer {
+				return execution.NewHomebrewInstaller(kind, commandRunner, exists)
+			}, func(commandRunner execution.CommandRunner) execution.Installer {
+				return execution.NewDotfilesInstaller(execution.NewLocalDotfilesProvider(commandRunner, execution.DotfilesBaseResolver{}))
+			})
+			var stdout, stderr bytes.Buffer
+			if got := run([]string{tt.command, "--profile", "dev", "--catalog", catalogPath, "--yes"}, &stdout, &stderr); got != tt.code {
+				t.Fatalf("exit code = %d, want %d; stderr=%q", got, tt.code, stderr.String())
+			}
+			if !reflect.DeepEqual(runner.calls, tt.calls) {
+				t.Fatalf("command calls = %#v, want %#v", runner.calls, tt.calls)
+			}
+			if !strings.Contains(stdout.String(), tt.output) {
+				t.Fatalf("stdout = %q, want %q", stdout.String(), tt.output)
+			}
+		})
+	}
 }
 
 func stubEnvironmentFacts(t *testing.T, facts planning.EnvironmentFacts) {

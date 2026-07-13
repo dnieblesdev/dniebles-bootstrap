@@ -147,8 +147,19 @@ func runApplyLike(command string, args []string, stdout, stderr io.Writer) int {
 		return exitFailure
 	}
 
-	runner := buildApplyRunner(mode, facts, result.Plan)
 	executionPlan := result.Plan
+	if isConfirmedMode(mode) && planHasEligibleBrewFormulaPackage(result.Plan) {
+		var presenceRunner execution.CommandRunner
+		if brewCommandExists("brew") {
+			presenceRunner = newOSCommandRunner()
+		}
+		presence := state.BrewFormulaDetector{
+			CommandExists: brewCommandExists,
+			Runner:        presenceRunner,
+		}.Detect(context.Background(), result.Plan)
+		executionPlan = state.ApplyBrewFormulaPresence(result.Plan, presence)
+	}
+	runner := buildApplyRunner(mode, facts, executionPlan)
 	if !isConfirmedMode(mode) {
 		executionPlan.Steps = append([]planning.PlanStep(nil), result.Plan.Steps...)
 		for index := range executionPlan.Steps {
@@ -156,7 +167,7 @@ func runApplyLike(command string, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	report := runner.Run(context.Background(), executionPlan)
-	report = appendApplyBootstrap(report, result.Plan)
+	report = appendApplyBootstrap(report, result.Plan, command, mode)
 	renderExecutionReport(stdout, mode, report)
 	if isConfirmedMode(mode) && hasFailedExecutionResult(report) {
 		return exitFailure
@@ -249,14 +260,27 @@ func newNoopApplyRunner() *execution.Runner {
 	)
 }
 
-func appendApplyBootstrap(report execution.ExecutionReport, plan planning.Plan) execution.ExecutionReport {
+func appendApplyBootstrap(report execution.ExecutionReport, plan planning.Plan, command string, mode applyMode) execution.ExecutionReport {
 	if !planHasBrewBackedInstall(plan) {
 		return report
+	}
+	if command == "bootstrap" && !isConfirmedMode(mode) {
+		return execution.AppendHomebrewBootstrap(report, plan, func(string) bool { return false })
 	}
 	brewExists := brewCommandExists("brew")
 	return execution.AppendHomebrewBootstrap(report, plan, func(name string) bool {
 		return name == "brew" && brewExists
 	})
+}
+
+func planHasEligibleBrewFormulaPackage(plan planning.Plan) bool {
+	for _, step := range plan.Steps {
+		if step.Ref.Kind == planning.ResourceKindPackage && step.Resource.Install != nil &&
+			step.Resource.Install.Provider == "brew" && strings.TrimSpace(step.Resource.Install.Package) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func planHasBrewBackedInstall(plan planning.Plan) bool {

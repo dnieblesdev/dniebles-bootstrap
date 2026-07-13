@@ -159,6 +159,48 @@ func TestRunnerContinuesOnMissingInstaller(t *testing.T) {
 	}
 }
 
+func TestRunnerHonorsEligibleBrewFormulaPresence(t *testing.T) {
+	installed := planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "jq"}
+	absent := planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "ripgrep"}
+	unknown := planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "fd"}
+	packageInstaller := &fakeInstaller{kind: planning.ResourceKindPackage}
+	runner := NewRunner(packageInstaller)
+	report := runner.Run(context.Background(), planning.Plan{Steps: []planning.PlanStep{
+		{Ref: installed, Resource: planning.Resource{Install: &planning.InstallMetadata{Provider: "brew", Package: "jq"}}, PackagePresence: planning.PackagePresenceInstalled},
+		{Ref: absent, Resource: planning.Resource{Install: &planning.InstallMetadata{Provider: "brew", Package: "ripgrep"}}, PackagePresence: planning.PackagePresenceAbsent},
+		{Ref: unknown, Resource: planning.Resource{Install: &planning.InstallMetadata{Provider: "brew", Package: "fd"}}, PackagePresence: planning.PackagePresenceUnknown},
+	}})
+
+	if got := report.Results[0]; got.Status != StepStatusSkipped || got.Message != "already installed; no mutation attempted" {
+		t.Fatalf("installed result = %#v", got)
+	}
+	if got := report.Results[1]; got.Status != StepStatusInstalled {
+		t.Fatalf("absent result = %#v, want existing installer dispatch", got)
+	}
+	if got := report.Results[2]; got.Status != StepStatusFailed || got.Message != "Homebrew formula presence could not be determined; no mutation attempted" || got.Err == nil {
+		t.Fatalf("unknown result = %#v", got)
+	}
+	if got, want := len(packageInstaller.calls), 1; got != want || packageInstaller.calls[0].Ref != absent {
+		t.Fatalf("installer calls = %#v, want absent step only", packageInstaller.calls)
+	}
+}
+
+func TestRunnerIgnoresPackagePresenceForInvalidBrewPackage(t *testing.T) {
+	installer := &fakeInstaller{kind: planning.ResourceKindPackage}
+	step := planning.PlanStep{
+		Ref:             planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "jq"},
+		Resource:        planning.Resource{Install: &planning.InstallMetadata{Provider: "apt", Package: "jq"}},
+		PackagePresence: planning.PackagePresenceInstalled,
+	}
+	report := NewRunner(installer).Run(context.Background(), planning.Plan{Steps: []planning.PlanStep{step}})
+	if got := report.Results[0].Status; got != StepStatusInstalled {
+		t.Fatalf("status = %q, want installer dispatch", got)
+	}
+	if got := len(installer.calls); got != 1 {
+		t.Fatalf("installer calls = %d, want 1", got)
+	}
+}
+
 func TestRunnerEmptyPlan(t *testing.T) {
 	runner := NewRunner(&fakeInstaller{kind: planning.ResourceKindTool})
 	report := runner.Run(context.Background(), planning.Plan{})
