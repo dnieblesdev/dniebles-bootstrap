@@ -27,14 +27,21 @@ const (
 )
 
 // catalogPathResolver resolves the default installed catalog path from XDG
-// base directories, falling back to $HOME/.local/share.
+// base directories, falling back to $HOME/.local/share and, last, the
+// Homebrew package-share location under HOMEBREW_PREFIX.
 type catalogPathResolver struct {
-	LookupEnv func(string) (string, bool)
-	HomeDir   func() (string, error)
+	LookupEnv  func(string) (string, bool)
+	HomeDir    func() (string, error)
+	PathExists func(string) bool
 }
 
-// Resolve returns the default catalog path. An empty string is returned when
-// neither XDG_DATA_HOME nor HOME can be resolved.
+// Resolve returns the default catalog path. Candidates are checked in
+// precedence order: XDG_DATA_HOME, $HOME/.local/share, and
+// $HOMEBREW_PREFIX/share/dbootstrap/catalog/bootstrap.toml. The first
+// existing candidate wins so that higher-priority catalogs always take
+// precedence. If no candidate exists, the highest-priority configured path
+// is returned so missing-catalog diagnostics remain useful. An empty string
+// is returned when no candidate can be built.
 func (r catalogPathResolver) Resolve() string {
 	lookupEnv := r.LookupEnv
 	if lookupEnv == nil {
@@ -44,20 +51,45 @@ func (r catalogPathResolver) Resolve() string {
 	if homeDir == nil {
 		homeDir = os.UserHomeDir
 	}
+	pathExists := r.PathExists
+	if pathExists == nil {
+		pathExists = fileExists
+	}
+
+	var candidates []string
 
 	if value, ok := lookupEnv("XDG_DATA_HOME"); ok && value != "" {
-		return filepath.Join(value, "dbootstrap", "catalog", "bootstrap.toml")
+		candidates = append(candidates, filepath.Join(value, "dbootstrap", "catalog", "bootstrap.toml"))
 	}
 
-	home, err := homeDir()
-	if err != nil {
-		return ""
+	if home, err := homeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".local", "share", "dbootstrap", "catalog", "bootstrap.toml"))
 	}
-	return filepath.Join(home, ".local", "share", "dbootstrap", "catalog", "bootstrap.toml")
+
+	if prefix, ok := lookupEnv("HOMEBREW_PREFIX"); ok && prefix != "" {
+		candidates = append(candidates, filepath.Join(prefix, "share", "dbootstrap", "catalog", "bootstrap.toml"))
+	}
+
+	for _, candidate := range candidates {
+		if pathExists(candidate) {
+			return candidate
+		}
+	}
+
+	if len(candidates) > 0 {
+		return candidates[0]
+	}
+	return ""
+}
+
+// fileExists reports whether path is an existing file or directory.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 var defaultCatalogPath = func() string {
-	return catalogPathResolver{LookupEnv: os.LookupEnv, HomeDir: os.UserHomeDir}.Resolve()
+	return catalogPathResolver{LookupEnv: os.LookupEnv, HomeDir: os.UserHomeDir, PathExists: fileExists}.Resolve()
 }
 
 // applyMode describes the safety mode selected for the apply command.

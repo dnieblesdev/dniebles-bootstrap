@@ -745,33 +745,94 @@ func TestRunApplyCommand(t *testing.T) {
 
 func TestResolveDefaultCatalogPath(t *testing.T) {
 	tests := []struct {
-		name        string
-		xdgDataHome string
-		home        string
-		homeErr     error
-		want        string
+		name           string
+		xdgDataHome    string
+		home           string
+		homeErr        error
+		homebrewPrefix string
+		existing       map[string]bool
+		want           string
 	}{
 		{
-			name:        "XDG_DATA_HOME takes precedence",
+			name:        "XDG_DATA_HOME takes precedence when existing",
 			xdgDataHome: "/custom/data",
 			home:        "/home/user",
-			want:        filepath.Join("/custom/data", "dbootstrap", "catalog", "bootstrap.toml"),
+			existing: map[string]bool{
+				filepath.Join("/custom/data", "dbootstrap", "catalog", "bootstrap.toml"): true,
+			},
+			want: filepath.Join("/custom/data", "dbootstrap", "catalog", "bootstrap.toml"),
 		},
 		{
-			name: "HOME fallback when XDG_DATA_HOME unset",
-			home: "/home/user",
+			name:           "HOME wins when XDG unset and Homebrew exists",
+			xdgDataHome:    "",
+			home:           "/home/user",
+			homebrewPrefix: "/opt/homebrew",
+			existing: map[string]bool{
+				filepath.Join("/home/user", ".local", "share", "dbootstrap", "catalog", "bootstrap.toml"): true,
+				filepath.Join("/opt/homebrew", "share", "dbootstrap", "catalog", "bootstrap.toml"):        true,
+			},
 			want: filepath.Join("/home/user", ".local", "share", "dbootstrap", "catalog", "bootstrap.toml"),
+		},
+		{
+			name:           "Homebrew wins when higher candidates missing",
+			xdgDataHome:    "",
+			home:           "/home/user",
+			homebrewPrefix: "/opt/homebrew",
+			existing: map[string]bool{
+				filepath.Join("/opt/homebrew", "share", "dbootstrap", "catalog", "bootstrap.toml"): true,
+			},
+			want: filepath.Join("/opt/homebrew", "share", "dbootstrap", "catalog", "bootstrap.toml"),
+		},
+		{
+			name:           "higher priority wins over Homebrew",
+			xdgDataHome:    "/custom/data",
+			home:           "/home/user",
+			homebrewPrefix: "/opt/homebrew",
+			existing: map[string]bool{
+				filepath.Join("/custom/data", "dbootstrap", "catalog", "bootstrap.toml"):           true,
+				filepath.Join("/opt/homebrew", "share", "dbootstrap", "catalog", "bootstrap.toml"): true,
+			},
+			want: filepath.Join("/custom/data", "dbootstrap", "catalog", "bootstrap.toml"),
 		},
 		{
 			name:        "XDG_DATA_HOME empty falls back to HOME",
 			xdgDataHome: "",
 			home:        "/home/user",
-			want:        filepath.Join("/home/user", ".local", "share", "dbootstrap", "catalog", "bootstrap.toml"),
+			existing: map[string]bool{
+				filepath.Join("/home/user", ".local", "share", "dbootstrap", "catalog", "bootstrap.toml"): true,
+			},
+			want: filepath.Join("/home/user", ".local", "share", "dbootstrap", "catalog", "bootstrap.toml"),
 		},
 		{
 			name:    "home resolution error returns empty",
 			homeErr: errors.New("no home"),
 			want:    "",
+		},
+		{
+			name:           "absent HOMEBREW_PREFIX omits Homebrew candidate",
+			xdgDataHome:    "/custom/data",
+			home:           "/home/user",
+			homebrewPrefix: "",
+			existing: map[string]bool{
+				filepath.Join("/custom/data", "dbootstrap", "catalog", "bootstrap.toml"): true,
+			},
+			want: filepath.Join("/custom/data", "dbootstrap", "catalog", "bootstrap.toml"),
+		},
+		{
+			name:           "no existing candidates returns highest priority",
+			xdgDataHome:    "/custom/data",
+			home:           "/home/user",
+			homebrewPrefix: "/opt/homebrew",
+			existing:       map[string]bool{},
+			want:           filepath.Join("/custom/data", "dbootstrap", "catalog", "bootstrap.toml"),
+		},
+		{
+			name:           "no existing candidates without XDG returns home local",
+			xdgDataHome:    "",
+			home:           "/home/user",
+			homebrewPrefix: "/opt/homebrew",
+			existing:       map[string]bool{},
+			want:           filepath.Join("/home/user", ".local", "share", "dbootstrap", "catalog", "bootstrap.toml"),
 		},
 	}
 
@@ -779,13 +840,21 @@ func TestResolveDefaultCatalogPath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			resolver := catalogPathResolver{
 				LookupEnv: func(key string) (string, bool) {
-					if key != "XDG_DATA_HOME" {
+					switch key {
+					case "XDG_DATA_HOME":
+						return tt.xdgDataHome, tt.xdgDataHome != ""
+					case "HOMEBREW_PREFIX":
+						return tt.homebrewPrefix, tt.homebrewPrefix != ""
+					default:
 						t.Fatalf("unexpected env lookup %q", key)
+						return "", false
 					}
-					return tt.xdgDataHome, tt.xdgDataHome != ""
 				},
 				HomeDir: func() (string, error) {
 					return tt.home, tt.homeErr
+				},
+				PathExists: func(path string) bool {
+					return tt.existing[path]
 				},
 			}
 
