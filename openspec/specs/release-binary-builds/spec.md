@@ -78,11 +78,18 @@ the archives and checksum files as one cataloged workflow artifact bundle.
 
 ### Requirement: Exclude release publishing
 
-The workflow MUST NOT create GitHub Releases, tags, package-manager channels,
-or any other publishing destination; outputs MUST remain workflow artifacts.
+The binary-build workflow MUST NOT create releases, tags, package channels, or
+other publishing destinations, whether direct or called; outputs remain artifacts.
+(Previously: only manually dispatched builds were specified as artifact-only.)
 
 #### Scenario: Manual build does not publish
 
 - GIVEN a binary-build workflow completes successfully
 - WHEN its side effects are inspected
 - THEN no release, tag, or external publication is created
+
+#### Scenario: Reusable build does not publish
+
+- GIVEN the publish workflow invokes the binary-build workflow
+- WHEN the called build completes
+- THEN it exposes artifacts without creating a release or tag

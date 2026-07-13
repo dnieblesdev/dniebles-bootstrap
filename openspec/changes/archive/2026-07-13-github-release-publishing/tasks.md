@@ -40,7 +40,7 @@ Chain strategy: stacked-to-main
 
 ## Phase 3: Verification and Evidence
 
-- [ ] 3.1 Review workflow permissions and YAML contracts; run the full Go suite and capture focused validator output.
-- [ ] 3.2 Dispatch a unique `vX.Y.Z-rc.N`, record run URL, input tag, prerelease state, and exactly six remote assets as success evidence.
-- [ ] 3.3 Exercise invalid/unprefixed input and checksum/build failure barriers; record failed runs proving no tag/release/upload mutation.
-- [ ] 3.4 Re-dispatch the successful prerelease tag; record existing-tag/release failure and unchanged remote state.
+- [x] 3.1 Review workflow permissions and YAML contracts; run the full Go suite and capture focused validator output.
+- [x] 3.2 Dispatch a unique `vX.Y.Z-rc.N`, record run URL, input tag, prerelease state, and exactly six remote assets as success evidence.
+- [x] 3.3 Exercise invalid/unprefixed input and checksum/build failure barriers; record failed runs proving no tag/release/upload mutation.
+- [x] 3.4 Re-dispatch the successful prerelease tag; record existing-tag/release failure and unchanged remote state.
