@@ -7,6 +7,22 @@ on:
         description: 'Version to embed in the binary (optional; defaults to git describe)'
         required: false
         type: string
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to embed in the binary'
+        required: true
+        type: string
+    outputs:
+      version:
+        description: 'Resolved original version'
+        value: ${{ jobs.version.outputs.version }}
+      safe_version:
+        description: 'Filesystem-safe normalized version'
+        value: ${{ jobs.version.outputs.safe_version }}
+      artifact_name:
+        description: 'Name of the consolidated artifact bundle'
+        value: ${{ jobs.upload.outputs.artifact_name }}
 
 permissions:
   contents: read
@@ -117,6 +133,8 @@ jobs:
   upload:
     needs: [version, build, quality]
     runs-on: ubuntu-latest
+    outputs:
+      artifact_name: ${{ steps.bundle.outputs.artifact_name }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -129,3 +147,7 @@ jobs:
           name: dbootstrap-artifacts-${{ needs.version.outputs.safe_version }}
           path: artifacts/*
           if-no-files-found: error
+
+      - name: Expose consolidated artifact name
+        id: bundle
+        run: echo "artifact_name=dbootstrap-artifacts-${{ needs.version.outputs.safe_version }}" >> "$GITHUB_OUTPUT"
