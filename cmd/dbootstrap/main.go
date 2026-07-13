@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	catalogtoml "github.com/dnieblesdev/dniebles-bootstrap/internal/catalog/toml"
@@ -20,12 +21,44 @@ import (
 )
 
 const (
-	defaultCatalogPath = "catalog/bootstrap.toml"
-
 	exitSuccess = 0
 	exitFailure = 1
 	exitUsage   = 2
 )
+
+// catalogPathResolver resolves the default installed catalog path from XDG
+// base directories, falling back to $HOME/.local/share.
+type catalogPathResolver struct {
+	LookupEnv func(string) (string, bool)
+	HomeDir   func() (string, error)
+}
+
+// Resolve returns the default catalog path. An empty string is returned when
+// neither XDG_DATA_HOME nor HOME can be resolved.
+func (r catalogPathResolver) Resolve() string {
+	lookupEnv := r.LookupEnv
+	if lookupEnv == nil {
+		lookupEnv = os.LookupEnv
+	}
+	homeDir := r.HomeDir
+	if homeDir == nil {
+		homeDir = os.UserHomeDir
+	}
+
+	if value, ok := lookupEnv("XDG_DATA_HOME"); ok && value != "" {
+		return filepath.Join(value, "dbootstrap", "catalog", "bootstrap.toml")
+	}
+
+	home, err := homeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".local", "share", "dbootstrap", "catalog", "bootstrap.toml")
+}
+
+var defaultCatalogPath = func() string {
+	return catalogPathResolver{LookupEnv: os.LookupEnv, HomeDir: os.UserHomeDir}.Resolve()
+}
 
 // applyMode describes the safety mode selected for the apply command.
 type applyMode string
@@ -366,7 +399,7 @@ func parseApplyLikeFlags(command string, args []string, stderr io.Writer) (plann
 	profile := flags.String("profile", "", "profile name to plan")
 	var resources resourceFlag
 	flags.Var(&resources, "resource", "resource target as kind:name (may be repeated)")
-	catalogPath := flags.String("catalog", defaultCatalogPath, "catalog TOML file path")
+	catalogPath := flags.String("catalog", "", "catalog TOML file path")
 	dryRun := flags.Bool("dry-run", false, "run in non-mutating dry-run mode")
 	yes := flags.Bool("yes", false, "confirmed mode; may run eligible Homebrew, Linux APT, and selected dotfile work")
 	sudo := flags.Bool("sudo", false, "use sudo for confirmed APT installation")
@@ -416,6 +449,10 @@ func parseApplyLikeFlags(command string, args []string, stderr io.Writer) (plann
 		}
 	}
 
+	if *catalogPath == "" {
+		*catalogPath = defaultCatalogPath()
+	}
+
 	return planning.PlanRequest{Profile: *profile, Resources: resourceRefs}, *catalogPath, mode, true
 }
 
@@ -429,7 +466,7 @@ func parsePlanFlags(command string, args []string, stderr io.Writer) (planning.P
 	profile := flags.String("profile", "", "profile name to plan")
 	var resources resourceFlag
 	flags.Var(&resources, "resource", "resource target as kind:name (may be repeated)")
-	catalogPath := flags.String("catalog", defaultCatalogPath, "catalog TOML file path")
+	catalogPath := flags.String("catalog", "", "catalog TOML file path")
 
 	if err := flags.Parse(args); err != nil {
 		printCommandUsage(command, stderr)
@@ -453,6 +490,10 @@ func parsePlanFlags(command string, args []string, stderr io.Writer) (planning.P
 		printCommandUsage(command, stderr)
 		fmt.Fprintln(stderr, "error: --profile or --resource is required")
 		return planning.PlanRequest{}, "", false
+	}
+
+	if *catalogPath == "" {
+		*catalogPath = defaultCatalogPath()
 	}
 
 	return planning.PlanRequest{Profile: *profile, Resources: resourceRefs}, *catalogPath, true

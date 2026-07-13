@@ -107,6 +107,101 @@ Supported entrypoint paths:
 
 After `dbootstrap` starts, the Go application owns catalog resolution, dotfiles integration, installer selection, dependency ordering, plan execution, and operational reporting.
 
+## Direct binary installation (Linux/WSL)
+
+`install.sh` installs a released `dbootstrap` binary and its bundled catalog without a package manager. It supports Linux and WSL on `amd64` and `arm64` only; other platforms fail with a clear error.
+
+### Managed paths
+
+| Asset | Default path | Override |
+|---|---|---|
+| Binary | `${XDG_BIN_HOME:-$HOME/.local/bin}/dbootstrap` | `XDG_BIN_HOME` |
+| Catalog | `${XDG_DATA_HOME:-$HOME/.local/share}/dbootstrap/catalog/bootstrap.toml` | `XDG_DATA_HOME` or `--catalog` |
+| Install state | `${XDG_DATA_HOME:-$HOME/.local/share}/dbootstrap/install-state.toml` | `XDG_DATA_HOME` |
+
+### Install from the repository script
+
+Review `install.sh`, then run it:
+
+```bash
+./install.sh
+```
+
+To install a specific release:
+
+```bash
+./install.sh --version v1.2.3
+```
+
+To install a prerelease:
+
+```bash
+./install.sh --version v1.3.0-rc.1 --allow-prerelease
+```
+
+### Manual download, verify, and install
+
+Replace `VERSION`, `OS`, and `ARCH` with the values for your host. `OS` is `linux`; `ARCH` is `amd64` or `arm64`.
+
+```bash
+VERSION=v1.2.3
+OS=linux
+ARCH=amd64
+ARCHIVE="dbootstrap_${VERSION}_${OS}_${ARCH}.tar.gz"
+BASE_URL="https://github.com/dnieblesdev/dniebles-bootstrap/releases/download/${VERSION}"
+
+# Download the archive and its SHA-256 file.
+curl -fsSL -o "${ARCHIVE}" "${BASE_URL}/${ARCHIVE}"
+curl -fsSL -o "${ARCHIVE}.sha256" "${BASE_URL}/${ARCHIVE}.sha256"
+
+# Verify the archive before extracting.
+sha256sum --check --status --strict "${ARCHIVE}.sha256"
+
+# Extract and place the managed files.
+mkdir -p "${HOME}/.local/bin"
+mkdir -p "${HOME}/.local/share/dbootstrap/catalog"
+tar -xzf "${ARCHIVE}"
+cp dbootstrap "${HOME}/.local/bin/dbootstrap"
+cp catalog/bootstrap.toml "${HOME}/.local/share/dbootstrap/catalog/bootstrap.toml"
+```
+
+### PATH export
+
+If `${XDG_BIN_HOME:-$HOME/.local/bin}` is not on `PATH`, `install.sh` prints the required export. Add it to your shell session or startup files yourself; the installer does not edit `.bashrc`, `.zshrc`, or any other shell configuration.
+
+```bash
+export PATH="${HOME}/.local/bin:${PATH}"
+```
+
+### Reinstall, upgrade, or downgrade
+
+A matching managed installation refuses to overwrite itself unless you explicitly confirm the lifecycle change:
+
+```bash
+./install.sh --force
+```
+
+`--force` also permits upgrades and downgrades. An unmanaged file at a managed path always aborts, even with `--force`.
+
+### Uninstall
+
+`--uninstall` removes only the managed binary, catalog, and state file. It refuses to delete modified files so your changes are preserved.
+
+```bash
+./install.sh --uninstall
+```
+
+### Catalog behavior after installation
+
+Once installed, `dbootstrap` reads the installed catalog at the managed path by default. It does not depend on the repository checkout or the current working directory. Use `--catalog <path>` when you want to run against a different catalog, such as the one in a local repository clone.
+
+### Scope and privilege boundaries
+
+- No `sudo`, package manager, or elevated privilege is used.
+- macOS, Windows, and other architectures are not supported by this path.
+- The installer does not edit shell startup files.
+- The installer does not adopt or remove existing unmarked installations.
+
 ## Architecture direction
 
 Future implementation should preserve these layers:

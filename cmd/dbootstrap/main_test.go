@@ -743,6 +743,119 @@ func TestRunApplyCommand(t *testing.T) {
 	}
 }
 
+func TestResolveDefaultCatalogPath(t *testing.T) {
+	tests := []struct {
+		name        string
+		xdgDataHome string
+		home        string
+		homeErr     error
+		want        string
+	}{
+		{
+			name:        "XDG_DATA_HOME takes precedence",
+			xdgDataHome: "/custom/data",
+			home:        "/home/user",
+			want:        filepath.Join("/custom/data", "dbootstrap", "catalog", "bootstrap.toml"),
+		},
+		{
+			name: "HOME fallback when XDG_DATA_HOME unset",
+			home: "/home/user",
+			want: filepath.Join("/home/user", ".local", "share", "dbootstrap", "catalog", "bootstrap.toml"),
+		},
+		{
+			name:        "XDG_DATA_HOME empty falls back to HOME",
+			xdgDataHome: "",
+			home:        "/home/user",
+			want:        filepath.Join("/home/user", ".local", "share", "dbootstrap", "catalog", "bootstrap.toml"),
+		},
+		{
+			name:    "home resolution error returns empty",
+			homeErr: errors.New("no home"),
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := catalogPathResolver{
+				LookupEnv: func(key string) (string, bool) {
+					if key != "XDG_DATA_HOME" {
+						t.Fatalf("unexpected env lookup %q", key)
+					}
+					return tt.xdgDataHome, tt.xdgDataHome != ""
+				},
+				HomeDir: func() (string, error) {
+					return tt.home, tt.homeErr
+				},
+			}
+
+			got := resolver.Resolve()
+			if got != tt.want {
+				t.Fatalf("Resolve() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunPlanDefaultCatalogFromXDGDataHome(t *testing.T) {
+	installedCatalog := writePrimaryCatalog(t)
+	original := defaultCatalogPath
+	defaultCatalogPath = func() string { return installedCatalog }
+	t.Cleanup(func() { defaultCatalogPath = original })
+
+	var stdout, stderr bytes.Buffer
+	stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+	stubInstallationState(t, planning.InstallationState{})
+	stubConfigState(t, planning.ConfigState{})
+	stubDotfilesState(t, planning.InstallationState{})
+
+	gotCode := run([]string{"plan", "--profile", "dev"}, &stdout, &stderr)
+	if gotCode != exitSuccess {
+		t.Fatalf("run() exit code = %d, want %d; stderr=%q", gotCode, exitSuccess, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Plan profile: dev") {
+		t.Fatalf("stdout missing plan header: %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Catalog: "+installedCatalog) {
+		t.Fatalf("stdout did not use installed catalog path: %q", stdout.String())
+	}
+}
+
+func TestRunPlanDefaultCatalogFromOutsideRepository(t *testing.T) {
+	installedCatalog := writePrimaryCatalog(t)
+	original := defaultCatalogPath
+	defaultCatalogPath = func() string { return installedCatalog }
+	t.Cleanup(func() { defaultCatalogPath = original })
+
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	workDir := t.TempDir()
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	var stdout, stderr bytes.Buffer
+	stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+	stubInstallationState(t, planning.InstallationState{})
+	stubConfigState(t, planning.ConfigState{})
+	stubDotfilesState(t, planning.InstallationState{})
+
+	gotCode := run([]string{"plan", "--profile", "dev"}, &stdout, &stderr)
+	if gotCode != exitSuccess {
+		t.Fatalf("run() exit code = %d, want %d; stderr=%q", gotCode, exitSuccess, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Catalog: "+installedCatalog) {
+		t.Fatalf("stdout did not use installed catalog path outside repo: %q", stdout.String())
+	}
+}
+
 func TestRunPlanDefaultCatalogSmokeIsDerived(t *testing.T) {
 	assertDefaultCatalogPlanSmoke(t)
 }

@@ -8,19 +8,26 @@ The operational README MUST describe the supported planning and execution comman
 
 ### Requirement: README documents the command workflow
 
-The README MUST document `plan`, `apply`, and `bootstrap` as available command surfaces and MUST distinguish planning, execution reporting, and bootstrap/advisory behavior.
+The README MUST document `plan`, `apply`, and `bootstrap`, distinguishing planning, execution, and advisory behavior. It MUST also document direct install/uninstall, supported architectures, paths, PATH, force, and catalog location.
 
-#### Scenario: A new operator can identify the commands
+#### Scenario: A new operator can identify commands and first install
 
 - GIVEN an operator reads the operational README
 - WHEN they look for the primary workflow
 - THEN the README describes `plan` for inspecting selected work
 - AND `apply` for reporting or performing the supported execution modes
 - AND `bootstrap` with its actual execution semantics and safety boundary
+- AND it provides install, PATH, catalog, force, and uninstall guidance
+
+#### Scenario: Unsupported platforms are not promised
+
+- GIVEN an operator reads the installation guidance
+- WHEN their host is macOS, Windows, or an unsupported architecture
+- THEN the README states that direct binary installation is unavailable
 
 ### Requirement: README documents target and safety flags
 
-The README MUST document the applicable `--profile`, repeatable `--resource`, and `--catalog` target flags, and MUST explain `--yes`, `--sudo`, and `--dry-run` according to the command's actual validation and mutation behavior. It MUST state that `--dry-run` and `--yes` are incompatible, and that `--sudo` is meaningful only with confirmed `--yes` where supported.
+The README MUST document `--profile`, repeatable `--resource`, `--catalog`, `--yes`, `--sudo`, and `--dry-run` accurately. It MUST state that dry-run and yes conflict, sudo requires confirmed yes where supported, and direct install never falls back to sudo or package managers.
 
 #### Scenario: Flag guidance matches command behavior
 
@@ -29,6 +36,16 @@ The README MUST document the applicable `--profile`, repeatable `--resource`, an
 - THEN target selection and safety-mode descriptions match actual behavior
 - AND the README does not imply that default or dry-run apply mutates the host
 - AND the README does not imply that `--sudo` independently enables mutation
+
+### Requirement: README states idempotency limits and exclusions
+
+The README MUST retain idempotency limits and state that direct installation verifies checksums, protects unmanaged files, and removes only unmodified manifest-owned files. It MUST NOT promise signing, package managers, macOS, or automatic `dbootstrap install` acquisition.
+
+#### Scenario: README prevents overclaiming
+
+- GIVEN an operator assesses installation or rerun behavior
+- WHEN they read the lifecycle guidance
+- THEN checksum-before-mutation, force protection, managed uninstall, and unsupported scope are explicit
 
 ### Requirement: README states the narrow idempotency promise
 
@@ -41,18 +58,6 @@ The README MUST state that confirmed apply and bootstrap avoid installer mutatio
 - THEN the README explains that the step is reported unchanged
 - AND it explicitly says no mutation is attempted
 - AND it identifies that `bootstrap` shares this apply behavior
-
-### Requirement: README states idempotency limits and exclusions
-
-The README MUST explicitly state that detected command presence is not proof of package installation details, package version, configuration correctness, or dotfile-link convergence. It MUST state that this slice does not perform retries, rollback, or bootstrap acquisition, and does not promise general idempotency for dotfiles.
-
-#### Scenario: README prevents overclaiming
-
-- GIVEN an operator reads the idempotency and limitations guidance
-- WHEN they assess whether a rerun reconciles the machine
-- THEN the README says package/version/configuration state is not verified by command presence
-- AND the README says dotfile module presence does not prove links are current
-- AND the README does not promise retry, rollback, or acquisition
 
 ### Requirement: README documents reporting and partial-failure recovery
 
