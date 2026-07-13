@@ -36,5 +36,5 @@ Chain strategy: pending
 ## Phase 3: Testing / Verification
 
 - [x] 3.1 Static-review `.github/workflows/build.yml` against trigger filters, Go-version sourcing, command order, and artifact restrictions.
-- [ ] 3.2 Open or update a PR targeting `main` and verify the GitHub job runs all three commands successfully in order.
-- [ ] 3.3 Verify a failed command produces a failed check and prevents later validation steps; confirm no artifacts are uploaded or published.
+- [x] 3.2 Open or update a PR targeting `main` and verify the GitHub job runs all three commands successfully in order.
+- [x] 3.3 Verify a failed command produces a failed check and prevents later validation steps; confirm no artifacts are uploaded or published.
