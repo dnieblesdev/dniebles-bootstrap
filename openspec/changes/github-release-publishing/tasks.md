@@ -33,10 +33,10 @@ Chain strategy: stacked-to-main
 
 ## Phase 2: Publish Workflow and Barriers
 
-- [ ] 2.1 Create `.github/workflows/release-publish.yml` with manual dispatch, strict validation before side effects, reusable build invocation, and read-only defaults.
-- [ ] 2.2 Add publish-job artifact download and exact six-file allowlist for the three archives plus matching `.sha256` files derived from `safe_version`.
-- [ ] 2.3 Add strict checksum verification and fail-fast barriers for missing/extra/tampered assets and unsuccessful called builds; prove no release upload occurs on failure.
-- [ ] 2.4 Add remote tag/release existence guards, `contents: write` only on publish, prerelease flagging, and explicit `gh release create` asset paths.
+- [x] 2.1 Create `.github/workflows/release-publish.yml` with manual dispatch, strict validation before side effects, reusable build invocation, and read-only defaults.
+- [x] 2.2 Add publish-job artifact download and exact six-file allowlist for the three archives plus matching `.sha256` files derived from `safe_version`.
+- [x] 2.3 Add strict checksum verification and fail-fast barriers for missing/extra/tampered assets and unsuccessful called builds; prove no release upload occurs on failure.
+- [x] 2.4 Add remote tag/release existence guards, `contents: write` only on publish, prerelease flagging, and explicit `gh release create` asset paths.
 
 ## Phase 3: Verification and Evidence
 

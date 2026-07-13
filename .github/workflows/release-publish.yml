@@ -1,0 +1,133 @@
+name: release-publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag (v-prefixed SemVer, e.g. v1.2.3)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Validate release tag
+        id: check
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          result="$(go run ./internal/version/cmd/validate --release --version "${INPUT_VERSION}")"
+          echo "${result}"
+          echo "prerelease=${result#prerelease=}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: validate
+    uses: ./.github/workflows/release-build.yml
+    with:
+      version: ${{ inputs.version }}
+
+  publish:
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ inputs.version }}
+      SAFE_VERSION: ${{ needs.build.outputs.safe_version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: dist
+
+      - name: Verify exact asset allowlist and checksums
+        working-directory: dist
+        run: |
+          set -euo pipefail
+
+          expected=(
+            "dbootstrap_${SAFE_VERSION}_linux_amd64.tar.gz"
+            "dbootstrap_${SAFE_VERSION}_linux_amd64.tar.gz.sha256"
+            "dbootstrap_${SAFE_VERSION}_linux_arm64.tar.gz"
+            "dbootstrap_${SAFE_VERSION}_linux_arm64.tar.gz.sha256"
+            "dbootstrap_${SAFE_VERSION}_windows_amd64.zip"
+            "dbootstrap_${SAFE_VERSION}_windows_amd64.zip.sha256"
+          )
+
+          missing=0
+          for f in "${expected[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "::error::Missing expected asset: $f"
+              missing=1
+            fi
+          done
+
+          actual_count=$(find . -maxdepth 1 -type f | wc -l)
+          expected_count=${#expected[@]}
+          if [ "$actual_count" -ne "$expected_count" ]; then
+            echo "::error::Expected exactly ${expected_count} files, found ${actual_count}"
+            find . -maxdepth 1 -type f -print0 | xargs -0 -I{} echo "::error::Extra file: {}"
+            exit 1
+          fi
+
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+          sha256sum --check --strict *.sha256
+
+      - name: Guard existing tag and release
+        run: |
+          set -euo pipefail
+
+          if gh api "repos/${{ github.repository }}/git/refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Tag ${VERSION} already exists"
+            exit 1
+          fi
+
+          if gh release view "${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Release ${VERSION} already exists"
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        working-directory: dist
+        run: |
+          set -euo pipefail
+
+          prerelease_flag=""
+          if [ "${{ needs.validate.outputs.prerelease }}" = "true" ]; then
+            prerelease_flag="--prerelease"
+          fi
+
+          gh release create "${VERSION}" \
+            --title "${VERSION}" \
+            --target "${GITHUB_SHA}" \
+            --notes "" \
+            ${prerelease_flag:+${prerelease_flag}} \
+            "dbootstrap_${SAFE_VERSION}_linux_amd64.tar.gz" \
+            "dbootstrap_${SAFE_VERSION}_linux_amd64.tar.gz.sha256" \
+            "dbootstrap_${SAFE_VERSION}_linux_arm64.tar.gz" \
+            "dbootstrap_${SAFE_VERSION}_linux_arm64.tar.gz.sha256" \
+            "dbootstrap_${SAFE_VERSION}_windows_amd64.zip" \
+            "dbootstrap_${SAFE_VERSION}_windows_amd64.zip.sha256"
