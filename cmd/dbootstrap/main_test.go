@@ -1157,6 +1157,20 @@ resources = ["package:ripgrep"]
 				return false
 			}
 			t.Cleanup(func() { brewCommandExists = originalBrew })
+			stubExecutionFactories(t,
+				func() execution.CommandRunner {
+					t.Fatal("bootstrap default and dry-run modes must not instantiate OS command runners")
+					return nil
+				},
+				func(planning.ResourceKind, execution.CommandRunner, execution.CommandExists) execution.Installer {
+					t.Fatal("bootstrap default and dry-run modes must not instantiate Homebrew installers")
+					return nil
+				},
+				func(execution.CommandRunner) execution.Installer {
+					t.Fatal("bootstrap default and dry-run modes must not instantiate dotfiles installers")
+					return nil
+				},
+			)
 
 			var stdout, stderr bytes.Buffer
 			args := append([]string{"bootstrap", "--profile", "dev", "--catalog", catalogPath}, flags...)
@@ -1711,6 +1725,58 @@ resources = ["package:ripgrep"]
 	}
 }
 
+func TestRunBootstrapConfirmedMissingBrewReportsUnknownWithoutInstantiatingHomebrewInstaller(t *testing.T) {
+	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `
+schema = "dniebles.catalog"
+version = 1
+
+[[packages]]
+id = "ripgrep"
+description = "Fast text search"
+[packages.install]
+provider = "brew"
+package = "ripgrep"
+
+[[profiles]]
+id = "dev"
+resources = ["package:ripgrep"]
+`)
+	stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+	stubInstallationState(t, planning.InstallationState{})
+	stubConfigState(t, planning.ConfigState{})
+	stubDotfilesState(t, planning.InstallationState{})
+	stubBrewCommandExists(t, false)
+	stubExecutionFactories(t,
+		func() execution.CommandRunner {
+			t.Fatal("missing brew must not instantiate OS command runner")
+			return nil
+		},
+		func(planning.ResourceKind, execution.CommandRunner, execution.CommandExists) execution.Installer {
+			t.Fatal("missing brew must not instantiate Homebrew installer")
+			return nil
+		},
+		func(execution.CommandRunner) execution.Installer {
+			t.Fatal("brew-only bootstrap must not instantiate dotfiles installer")
+			return nil
+		},
+	)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	gotCode := run([]string{"bootstrap", "--profile", "dev", "--catalog", catalogPath, "--yes"}, &stdout, &stderr)
+
+	if gotCode != exitFailure {
+		t.Fatalf("run() exit code = %d, want %d", gotCode, exitFailure)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "package:ripgrep [failed] Homebrew formula presence could not be determined; no mutation attempted") || !strings.Contains(out, "homebrew:bootstrap: Install Homebrew") {
+		t.Fatalf("stdout missing unknown-presence result or bootstrap guidance: %q", out)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestRunApplyCatalogLoadErrors(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -2158,7 +2224,11 @@ resources = ["package:json-tool"]
 		{"apply installed", "apply", []execution.CommandResult{{Status: execution.CommandStatusSucceeded}}, exitSuccess, []execution.CommandRequest{{Executable: "brew", Args: []string{"list", "--formula", "jq"}, Timeout: 30 * time.Second}}, "already installed; no mutation attempted"},
 		{"bootstrap installed", "bootstrap", []execution.CommandResult{{Status: execution.CommandStatusSucceeded}}, exitSuccess, []execution.CommandRequest{{Executable: "brew", Args: []string{"list", "--formula", "jq"}, Timeout: 30 * time.Second}}, "already installed; no mutation attempted"},
 		{"apply explicitly absent", "apply", []execution.CommandResult{{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "Error: No such keg: jq", Err: errors.New("exit 1")}, {Status: execution.CommandStatusSucceeded}}, exitSuccess, []execution.CommandRequest{{Executable: "brew", Args: []string{"list", "--formula", "jq"}, Timeout: 30 * time.Second}, {Executable: "brew", Args: []string{"install", "jq"}}}, "installed jq"},
+		{"bootstrap explicitly absent", "bootstrap", []execution.CommandResult{{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "Error: No such keg: jq", Err: errors.New("exit 1")}, {Status: execution.CommandStatusSucceeded}}, exitSuccess, []execution.CommandRequest{{Executable: "brew", Args: []string{"list", "--formula", "jq"}, Timeout: 30 * time.Second}, {Executable: "brew", Args: []string{"install", "jq"}}}, "installed jq"},
 		{"apply timed out", "apply", []execution.CommandResult{{Status: execution.CommandStatusTimedOut, Err: context.DeadlineExceeded}}, exitFailure, []execution.CommandRequest{{Executable: "brew", Args: []string{"list", "--formula", "jq"}, Timeout: 30 * time.Second}}, "presence could not be determined; no mutation attempted"},
+		{"bootstrap timed out", "bootstrap", []execution.CommandResult{{Status: execution.CommandStatusTimedOut, Err: context.DeadlineExceeded}}, exitFailure, []execution.CommandRequest{{Executable: "brew", Args: []string{"list", "--formula", "jq"}, Timeout: 30 * time.Second}}, "presence could not be determined; no mutation attempted"},
+		{"bootstrap runner error", "bootstrap", []execution.CommandResult{{Status: execution.CommandStatusFailed, Err: errors.New("runner failed")}}, exitFailure, []execution.CommandRequest{{Executable: "brew", Args: []string{"list", "--formula", "jq"}, Timeout: 30 * time.Second}}, "presence could not be determined; no mutation attempted"},
+		{"bootstrap unclassified non-zero", "bootstrap", []execution.CommandResult{{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "Error: unknown brew failure", Err: errors.New("exit 1")}}, exitFailure, []execution.CommandRequest{{Executable: "brew", Args: []string{"list", "--formula", "jq"}, Timeout: 30 * time.Second}}, "presence could not be determined; no mutation attempted"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

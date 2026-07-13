@@ -4,6 +4,24 @@
 
 Completed under strict TDD. All ten persisted implementation tasks are marked `- [x]` in `tasks.md`.
 
+## Remediation (2026-07-13)
+
+Independent verification identified a functional-evidence gap in bootstrap composition coverage for eligible Brew packages. This remediation adds the minimum test coverage to close that gap; no production code was changed.
+
+### Bootstrap composition coverage added
+
+- `TestConfirmedCommandsCheckBrewFormulaBeforeInstall` expanded with table-driven bootstrap cases:
+  - `bootstrap explicitly absent`: proves the `brew list --formula jq` query precedes `brew install jq` and the package is reported as installed.
+  - `bootstrap timed out`: proves unknown presence suppresses the installer and reports failure.
+  - `bootstrap runner error`: proves a runner failure is treated as unknown and suppresses the installer.
+  - `bootstrap unclassified non-zero`: proves an unrecognized non-zero exit is treated as unknown and suppresses the installer.
+- New `TestRunBootstrapConfirmedMissingBrewReportsUnknownWithoutInstantiatingHomebrewInstaller`: proves confirmed `bootstrap --yes` with missing Brew reports unknown failure and does not instantiate the OS command runner, Homebrew installer, or dotfiles installer.
+- `TestRunBootstrapDefaultAndDryRunDoNotProbeBrew` extended with `stubExecutionFactories` to prove default and `--dry-run` bootstrap do not instantiate OS command runners, Homebrew installers, or dotfiles installers for package presence.
+
+### Production code changes
+
+None. The shared `runApplyLike` path already treats `apply` and `bootstrap` identically for confirmed-mode Brew formula presence. The remediation only adds behavioral evidence for the bootstrap branch.
+
 ## Preserved blocked-attempt history
 
 The initial apply attempt was blocked before implementation because the task artifact had no persisted Markdown checkboxes. No production or test files changed then. The task artifact defect was repaired before this run; authoritative native status on 2026-07-12 then reported `applyState: ready`, `nextRecommended: apply`, `artifactStore: openspec`, and repo-local edit authority rooted at `/home/dniebles/dniebles-bootstrap`.
@@ -26,7 +44,7 @@ The initial apply attempt was blocked before implementation because the task art
 - [x] 6. **TRIANGULATE — Mixed-plan order and mutation safety at the runner boundary**
 - [x] 7. **RED — Confirmed CLI composition and safe-mode boundaries**
 - [x] 8. **GREEN — Wire detector only into confirmed apply/bootstrap**
-- [x] 9. **TRIANGULATE — End-to-end acceptance and scope regression tests**
+- [x] 9. **TRIANGULATE — End-to-end acceptance and scope regression tests** *(refreshed with additional bootstrap composition evidence)*
 - [x] 10. **REFACTOR — Documentation and review-ready cleanup**
 
 ## TDD Cycle Evidence
@@ -37,8 +55,11 @@ The initial apply attempt was blocked before implementation because the task art
 | Runner | `go test ./internal/execution` failed because installed Brew presence dispatched the installer. | Added installed/absent/unknown and malformed-boundary tests; `go test ./internal/execution` and `go vet ./internal/execution` passed. |
 | CLI | `go test ./cmd/dbootstrap` failed because the first command was `brew install jq`, not the presence query. | Confirmed-mode composition now queries first, skips installed formulas, and preserves safe modes; `go test ./cmd/dbootstrap` and `go vet ./cmd/dbootstrap` passed. |
 | Refactor | N/A; cleanup followed passing behavior. | `gofmt`, `go test -count=1 ./...`, `go vet ./...`, and `git diff --check` passed. |
+| Bootstrap coverage remediation | Coverage remediation for existing behavior; new table cases reference existing production behavior and pass immediately because `runApplyLike` is shared between `apply` and `bootstrap`. | Added bootstrap explicit-absent, timeout, runner-error, and unclassified-non-zero cases; added missing-Brew and safe-mode no-instantiation tests; focused and full suites pass. |
 
 ## Files changed
+
+### Original implementation
 
 - `README.md`
 - `cmd/dbootstrap/main.go`
@@ -51,7 +72,14 @@ The initial apply attempt was blocked before implementation because the task art
 - `openspec/changes/brew-package-presence-idempotency/tasks.md`
 - `openspec/changes/brew-package-presence-idempotency/apply-progress.md`
 
+### Remediation only
+
+- `cmd/dbootstrap/main_test.go` (+70 lines; table-driven bootstrap coverage and missing-Brew/safe-mode instantiation proofs)
+- `openspec/changes/brew-package-presence-idempotency/apply-progress.md`
+
 ## Verification
+
+### Original implementation
 
 - `go test ./internal/state ./internal/planning` (RED: expected failure)
 - `go test ./internal/execution` (RED: expected failure)
@@ -62,13 +90,22 @@ The initial apply attempt was blocked before implementation because the task art
 - `gofmt -l` on all touched Go files (clean)
 - `git diff --check` (pass)
 
+### Remediation verification (2026-07-13)
+
+- `go test -count=1 -run 'TestConfirmedCommandsCheckBrewFormulaBeforeInstall|TestRunBootstrapConfirmedMissingBrewReportsUnknownWithoutInstantiatingHomebrewInstaller|TestRunBootstrapDefaultAndDryRunDoNotProbeBrew' ./cmd/dbootstrap -v` (pass)
+- `go test -count=1 ./cmd/dbootstrap` (pass)
+- `go test -count=1 ./...` (pass)
+- `go vet ./...` (pass)
+- `gofmt -l cmd/dbootstrap/main_test.go` (clean)
+- `git diff --check` (pass)
+
 ## Workload / PR boundary
 
-Single PR work unit. Estimated changed-line count is 356 including new untracked detector/test files, below the 400-line budget.
+Single PR work unit. Original implementation estimated changed-line count was 356 including new untracked detector/test files, below the 400-line budget. Remediation adds 70 lines in `cmd/dbootstrap/main_test.go` only; cumulative diff remains well below 400 lines.
 
 ## Deviations and remaining work
 
-No scope deviations. The absent-result recognizer accepts only failed exit 1 with the exact supported `No such keg` diagnostic fragment; all other non-success outcomes remain unknown. No unchecked implementation tasks remain. Next phase: independent SDD verification.
+No scope deviations. No production code changes were required for the remediation. The absent-result recognizer accepts only failed exit 1 with the exact supported `No such keg` diagnostic fragment; all other non-success outcomes remain unknown. No unchecked implementation tasks remain. Next phase: independent SDD verification re-run.
 
 ## Structured status consumed
 
