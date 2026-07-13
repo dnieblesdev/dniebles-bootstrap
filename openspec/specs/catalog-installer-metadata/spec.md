@@ -6,12 +6,20 @@
 
 Catalog resources MUST allow inert install metadata to be stored as structured data for downstream provider selection.
 The system SHALL preserve provider/package information without inferring execution behavior.
+Only the supported providers `brew` and `apt` are accepted; other providers are rejected at decode time.
 
 #### Scenario: Provider and package metadata are accepted
 
-- GIVEN a catalog resource with install metadata containing a provider and package name
+- GIVEN a catalog resource with install metadata containing a supported provider and package name
 - WHEN the resource is decoded into the catalog model
 - THEN the install metadata is preserved as structured data
+- AND no shell command is required
+
+#### Scenario: Unsupported install provider is rejected
+
+- GIVEN a catalog resource with install metadata using provider `asdf`
+- WHEN the resource is decoded
+- THEN decoding fails with a clear unsupported-provider error
 - AND no shell command is required
 
 #### Scenario: Missing install metadata remains valid

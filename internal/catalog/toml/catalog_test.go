@@ -77,7 +77,7 @@ presence = { kind = "path", name = "rg" }
 [[runtimes]]
 id = "go"
 description = "Go toolchain"
-install = { provider = "asdf", package = "golang" }
+install = { provider = "brew", package = "golang" }
 
 [[dotfiles]]
 id = "bash"
@@ -111,7 +111,7 @@ description = "Bash dotfiles"
 				Ref:         runtimeGo,
 				Description: "Go toolchain",
 				DependsOn:   []planning.ResourceRef{},
-				Install:     &planning.InstallMetadata{Provider: "asdf", Package: "golang"},
+				Install:     &planning.InstallMetadata{Provider: "brew", Package: "golang"},
 			},
 			dotBash: {
 				Ref:         dotBash,
@@ -190,6 +190,11 @@ func TestDecodeValidationErrors(t *testing.T) {
 			name:    "install metadata missing package",
 			input:   "[[tools]]\nid = \"git\"\ninstall = { provider = \"apt\" }",
 			wantErr: "install metadata requires non-empty provider and package",
+		},
+		{
+			name:    "install provider asdf is not supported",
+			input:   "[[tools]]\nid = \"git\"\ninstall = { provider = \"asdf\", package = \"git\" }",
+			wantErr: "install provider \"asdf\" is not supported",
 		},
 		{
 			name:    "presence metadata unsupported kind",

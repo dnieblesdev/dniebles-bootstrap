@@ -49,7 +49,7 @@ type Resource struct {
 
 // InstallMetadata is inert desired-state data for provider selection.
 type InstallMetadata struct {
-	Provider string // e.g. "brew", "apt", "asdf", "go"
+	Provider string // supported values are "brew" and "apt"
 	Package  string // provider-specific package name
 }
 

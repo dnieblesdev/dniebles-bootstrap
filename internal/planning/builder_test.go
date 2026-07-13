@@ -376,7 +376,7 @@ func TestBuildPlanPreservesResourceMetadata(t *testing.T) {
 			runtimeGo: {
 				Ref:       runtimeGo,
 				DependsOn: []ResourceRef{toolGit},
-				Install:   &InstallMetadata{Provider: "asdf", Package: "golang"},
+				Install:   &InstallMetadata{Provider: "brew", Package: "golang"},
 			},
 			toolGit: {Ref: toolGit},
 		},
@@ -405,7 +405,7 @@ func TestBuildPlanPreservesResourceMetadata(t *testing.T) {
 				t.Fatalf("package presence metadata = %#v, want %#v", got, want)
 			}
 		case runtimeGo:
-			if got, want := step.Resource.Install, (&InstallMetadata{Provider: "asdf", Package: "golang"}); !reflect.DeepEqual(got, want) {
+			if got, want := step.Resource.Install, (&InstallMetadata{Provider: "brew", Package: "golang"}); !reflect.DeepEqual(got, want) {
 				t.Fatalf("runtime install metadata = %#v, want %#v", got, want)
 			}
 			if step.Resource.Presence != nil {
@@ -433,7 +433,7 @@ func TestBuildPlanMetadataDoesNotAlterPlanningOutcome(t *testing.T) {
 	packageRes.Presence = &PresenceMetadata{Kind: "command_exists", Name: "rg"}
 	withMetadata.Resources[packageRip] = packageRes
 	runtimeRes := withMetadata.Resources[runtimeGo]
-	runtimeRes.Install = &InstallMetadata{Provider: "asdf", Package: "golang"}
+	runtimeRes.Install = &InstallMetadata{Provider: "brew", Package: "golang"}
 	withMetadata.Resources[runtimeGo] = runtimeRes
 
 	request := PlanRequest{Resources: []ResourceRef{packageRip, runtimeGo}}

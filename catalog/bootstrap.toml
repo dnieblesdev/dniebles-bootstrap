@@ -19,9 +19,6 @@ depends_on = ["tool:git"]
 config_required = ["go.env"]
 os = ["linux", "darwin"]
 arch = ["amd64", "arm64"]
-[runtimes.install]
-provider = "asdf"
-package = "golang"
 [runtimes.presence]
 kind = "command_exists"
 name = "go"

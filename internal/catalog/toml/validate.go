@@ -94,6 +94,9 @@ func validateResourceMetadata(entries []resourceEntry, kind planning.ResourceKin
 			if strings.TrimSpace(entry.Install.Provider) == "" || strings.TrimSpace(entry.Install.Package) == "" {
 				return fmt.Errorf("%s %q install metadata requires non-empty provider and package", kind, entry.ID)
 			}
+			if !supportedInstallProvider(entry.Install.Provider) {
+				return fmt.Errorf("%s %q install provider %q is not supported", kind, entry.ID, entry.Install.Provider)
+			}
 		}
 		if entry.Presence != nil {
 			if strings.TrimSpace(entry.Presence.Kind) == "" || strings.TrimSpace(entry.Presence.Name) == "" {
@@ -110,6 +113,15 @@ func validateResourceMetadata(entries []resourceEntry, kind planning.ResourceKin
 func supportedPresenceKind(kind string) bool {
 	switch kind {
 	case "path", "command_exists":
+		return true
+	default:
+		return false
+	}
+}
+
+func supportedInstallProvider(provider string) bool {
+	switch provider {
+	case "apt", "brew":
 		return true
 	default:
 		return false
