@@ -14,8 +14,8 @@
 
 ### Phase 3: Verification and Evidence
 - [x] 3.1 Review YAML triggers, permissions, target matrix, archive layout, checksum commands, and failure gating; run `go test ./...`, `go vet ./...`, and the relevant builds.
-- [ ] 3.2 Manually dispatch the workflow with `v1.2.3`, record the successful run URL, download the artifact bundle, and verify all archive formats, filenames, catalog contents, executables, and checksum matches. **BLOCKED — workflow unavailable remotely; see apply-progress blocker.**
-- [ ] 3.3 Inspect the manual run side effects and record evidence that no release, tag, package-manager channel, or other publication was created; retain evidence in the verification report. **BLOCKED — workflow unavailable remotely; see apply-progress blocker.**
+- [x] 3.2 Manually dispatch the workflow with `v1.2.3`, record the successful run URL, download the artifact bundle, and verify all archive formats, filenames, catalog contents, executables, and checksum matches.
+- [x] 3.3 Inspect the manual run side effects and record evidence that no release, tag, package-manager channel, or other publication was created; retain evidence in the verification report.
 
 ### Phase 4: Cleanup
 - [x] 4.1 Confirm the existing validation workflow remains unchanged and document deferred Windows/ARM runtime testing and artifact-retention rollback behavior.
@@ -35,6 +35,8 @@
 | 1.3 | `cmd/dbootstrap/main_test.go` / manual | Integration | N/A | N/A (verification step) | ✅ Verified | ✅ ldflags build reports v1.2.3 | ➖ None needed |
 | 2.1–2.3 | `.github/workflows/release-build.yml` | Workflow | N/A (new file) | N/A (structural/config) | ✅ YAML valid | ➖ Single structural output | ➖ None needed |
 | 3.1 | `cmd/dbootstrap/main_test.go` / local simulation | Integration | ✅ full suite green | N/A | ✅ Verified | ✅ Linux tar.gz contents + checksums + Windows PE binary | ➖ None needed |
+| 3.2 | GitHub Actions runtime | Integration | ✅ workflow on remote main | N/A | ✅ Verified | ✅ Real dispatch produced all target artifacts + consolidated bundle | ✅ Clean |
+| 3.3 | GitHub API checks | Integration | ✅ no publish steps in workflow | N/A | ✅ Verified | ✅ No tags, releases, or packages created | ✅ Clean |
 | R4-001 | `.github/workflows/release-build.yml` | Workflow | ✅ full suite green | N/A (structural/config) | ✅ YAML valid | ➖ Single structural output | ➖ None needed |
 | R4-002 | `internal/version/validate_test.go`, `internal/version/cmd_validate_test.go` | Unit / Integration | ✅ full suite green | ✅ Written | ✅ Passed | ✅ 20 cases (valid/invalid/empty/length/charset) | ✅ Extracted `maxVersionLength` constant |
 | R4-003 | `.github/workflows/release-build.yml` | Workflow | ✅ YAML valid | N/A (structural/config) | ✅ YAML valid | ✅ No `${{ inputs.version }}` inside `run:` scripts | ✅ Clean |
@@ -65,11 +67,12 @@
 | `internal/version/cmd/validate/main.go` | Created | Tiny CLI wrapper that invokes `version.Validate` and exits non-zero on failure. |
 | `.github/workflows/release-build.yml` | Modified | Added `quality` job (test/vet/build), gated `build` and `upload` on it, and added a `go run ./internal/version/cmd/validate` step in the `version` job. |
 | `.github/workflows/release-build.yml` | Modified (R4-003) | Replaced all `${{ inputs.version }}` interpolations inside `run:` scripts with `env.INPUT_VERSION`; quoted shell references to prevent injection before validation. |
-| `internal/version/normalize.go` | Created | `NormalizeGitVersion` function: safe charset `[A-Za-z0-9._-]`, collapse invalid runs to `-`, trim edge separators, `dev` fallback. |
+| `internal/version/normalize.go` | Created | `NormalizeGitVersion` function: safe charset `[A-Za-z0-9._-]`, collapse invalid runs to `-`, trim edge separators, fall back to `dev` if empty. |
 | `internal/version/normalize_test.go` | Created | Table-driven tests covering tags, slash branches, spaces, invalid characters, empty input, edge trims, and unicode. |
 | `internal/version/cmd/normalize/main.go` | Created | Tiny CLI wrapper that invokes `version.NormalizeGitVersion` and prints the sanitized version. |
 | `internal/version/cmd_normalize_test.go` | Created | Integration test that runs `go run ./cmd/normalize --version ...` for normal, slash-branch, and empty inputs. |
 | `.github/workflows/release-build.yml` | Modified (R4-004) | Added `safe_version` job output; preserve `version` for ldflags injection; use `safe_version` for staging directories, archive names, checksum files, and artifact names. |
+| `openspec/changes/release-binary-builds/verify-report.md` | Created | Hybrid verification evidence for workflow dispatch, artifact inspection, and no-publication checks. |
 
 ## Local Build Verification
 
@@ -98,7 +101,58 @@ Version normalization verified locally:
 
 Workflow YAML validated with `python3 -c "import yaml; yaml.safe_load(...)`" and passes.
 
-Windows `.zip` archive creation was not verified locally because `zip` is unavailable in this environment; the Ubuntu GitHub Actions runner provides it.
+## Remote Workflow Dispatch Verification
+
+Dispatched `release-build` on `main` with version `v1.2.3`:
+
+- **Run URL**: https://github.com/dnieblesdev/dniebles-bootstrap/actions/runs/29233218426
+- **Run ID**: `29233218426`
+- **Trigger**: `workflow_dispatch` with `version=v1.2.3`
+- **Conclusion**: success
+- **Jobs**:
+  - `version` in 13s (ID 86761880126) — validated input and resolved `version=v1.2.3`, `safe_version=v1.2.3`
+  - `quality` in 12s (ID 86761880152) — `go test ./...`, `go vet ./...`, `go build ./...` all passed
+  - `build (windows, amd64, .exe, zip)` in 14s (ID 86761926665) — produced `dbootstrap_v1.2.3_windows_amd64.zip` + `.sha256`
+  - `build (linux, amd64, tar.gz)` in 13s (ID 86761926666) — produced `dbootstrap_v1.2.3_linux_amd64.tar.gz` + `.sha256`
+  - `build (linux, arm64, tar.gz)` in 16s (ID 86761926683) — produced `dbootstrap_v1.2.3_linux_arm64.tar.gz` + `.sha256`
+  - `upload` in 8s (ID 86761979446) — downloaded matrix artifacts and uploaded consolidated `dbootstrap-artifacts-v1.2.3`
+
+Downloaded artifacts:
+
+| Artifact | Contents |
+|----------|----------|
+| `dbootstrap-linux-amd64` | `dbootstrap_v1.2.3_linux_amd64.tar.gz` + `.sha256` |
+| `dbootstrap-linux-arm64` | `dbootstrap_v1.2.3_linux_arm64.tar.gz` + `.sha256` |
+| `dbootstrap-windows-amd64` | `dbootstrap_v1.2.3_windows_amd64.zip` + `.sha256` |
+| `dbootstrap-artifacts-v1.2.3` | All six files above consolidated |
+
+Artifact inspection results:
+
+- All three `.sha256` files verified with `sha256sum -c`.
+- `linux/amd64` archive extracts to `./dbootstrap` + `./catalog/bootstrap.toml`; binary is `ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked`; `./dbootstrap --version` prints `v1.2.3`.
+- `linux/arm64` archive extracts to `./dbootstrap` + `./catalog/bootstrap.toml`; binary is `ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked`.
+- `windows/amd64` archive extracts to `dbootstrap.exe` + `catalog/bootstrap.toml`; binary is `PE32+ executable for MS Windows 6.01 (console), x86-64`.
+- `catalog/bootstrap.toml` matches the source catalog file.
+
+SHA-256 values of downloaded archives:
+
+```text
+421cc9ac9b6cfae6ddd06e7bc411b40d36ee652c044e88083ad91eef333c8f6a  dbootstrap_v1.2.3_linux_amd64.tar.gz
+39cdb63b072860639783ef939f220e9f0164c7f252528389af360029dedf0c6c  dbootstrap_v1.2.3_linux_arm64.tar.gz
+ebc1711ff841443c6dee15e29f9f760863669ac0e2c1049ec38d4e8b3b27c8ad  dbootstrap_v1.2.3_windows_amd64.zip
+```
+
+## No-Publication Verification
+
+Checked GitHub side effects after the successful run:
+
+| Check | Command | Result |
+|-------|---------|--------|
+| Tags | `gh api repos/dnieblesdev/dniebles-bootstrap/git/refs/tags` | 404 — no tags exist |
+| Releases | `gh release list --repo dnieblesdev/dniebles-bootstrap` | empty list |
+| Packages | `gh api repos/dnieblesdev/dniebles-bootstrap/packages` | 404 — no packages exist |
+
+The workflow file contains no `actions/create-release`, `softprops/action-gh-release`, `gh release`, `docker push`, npm publish, or any other publication step. `permissions: contents: read` prevents write access to contents/releases.
 
 ## Deviations from Design
 
@@ -107,19 +161,18 @@ None — implementation matches design.
 ## Issues Found
 
 - Windows/ARM runtime testing remains deferred (out of scope per proposal).
-- Manual workflow dispatch (tasks 3.2 and 3.3) cannot be performed from this local environment; they require the GitHub Actions UI and a push of the workflow to the repository.
+- Node.js 20 deprecation annotation for `actions/checkout@v4`, `actions/setup-go@v5`, `actions/upload-artifact@v4`, and `actions/download-artifact@v4` (forced to Node.js 24 by GitHub). Non-blocking; does not affect artifact correctness.
 
 ## Remaining Tasks
 
-- [ ] 3.2 Manually dispatch the workflow with `v1.2.3`, record the successful run URL, download the artifact bundle, and verify all archive formats, filenames, catalog contents, executables, and checksum matches.
-- [ ] 3.3 Inspect the manual run side effects and record evidence that no release, tag, package-manager channel, or other publication was created; retain evidence in the verification report.
+None — all tasks complete.
 
 ## Workload / PR Boundary
 
 - Mode: single PR
-- Current work unit: Review fixes R4-001/002/003/004 on top of the existing release-binary-builds slice
-- Boundary: starts at the existing local release-build workflow and ends after quality-gate + version-validation + version-normalization fixes with local suite evidence
-- Estimated review budget impact: small additive change (~80–130 lines) on top of the original 180–260 line forecast; still within single-PR budget
+- Current work unit: Release binary builds slice including version contract, workflow, review fixes, and remote dispatch evidence
+- Boundary: starts at the existing local release-build workflow and ends after real remote dispatch verification with artifact inspection and no-publication evidence
+- Estimated review budget impact: within original 180–260 line forecast plus ~80–130 line review fixes; still within single-PR budget
 
 ## Rollback / Deferred Notes
 

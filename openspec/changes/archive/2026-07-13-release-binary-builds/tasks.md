@@ -39,20 +39,8 @@ Chain strategy: pending
 ## Phase 3: Verification and Evidence
 
 - [x] 3.1 Review YAML triggers, permissions, target matrix, archive layout, checksum commands, and failure gating; run `go test ./...`, `go vet ./...`, and the relevant builds.
-- [ ] 3.2 Manually dispatch the workflow with `v1.2.3`, record the successful run URL, download the artifact bundle, and verify all archive formats, filenames, catalog contents, executables, and checksum matches. **BLOCKED — workflow unavailable remotely; see apply-progress blocker.**
-- [ ] 3.3 Inspect the manual run side effects and record evidence that no release, tag, package-manager channel, or other publication was created; retain evidence in the verification report. **BLOCKED — workflow unavailable remotely; see apply-progress blocker.**
-
-### Task 3.2 / 3.3 Blocker
-
-The workflow file `.github/workflows/release-build.yml` exists only in the local working tree (untracked) and is **not present on the remote repository**.
-
-Evidence:
-
-- `git ls-tree -r origin/main --name-only` shows only `.github/workflows/build.yml` in the workflows directory.
-- `gh workflow list --repo dnieblesdev/dniebles-bootstrap --all` returns only the `build` workflow.
-- `gh api repos/dnieblesdev/dniebles-bootstrap/contents/.github/workflows` returns only `build.yml`.
-
-Because commit/push is not authorized for this apply batch, the workflow cannot be made available remotely. `workflow_dispatch` requires the workflow file to exist on the remote branch before it can be dispatched. Tasks 3.2 and 3.3 remain pending until the workflow is pushed and the apply batch is re-run.
+- [x] 3.2 Manually dispatch the workflow with `v1.2.3`, record the successful run URL, download the artifact bundle, and verify all archive formats, filenames, catalog contents, executables, and checksum matches.
+- [x] 3.3 Inspect the manual run side effects and record evidence that no release, tag, package-manager channel, or other publication was created; retain evidence in the verification report.
 
 ## Phase 4: Cleanup
 
