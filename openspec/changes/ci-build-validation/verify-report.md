@@ -204,11 +204,11 @@ Authorization: The repository owner/maintainer explicitly authorized this tempor
 
 ### Cleanup status
 
-- [ ] PR #2 closed unmerged
-- [ ] Issue #1 closed
-- [ ] Remote branch `test/ci-failure-evidence` deleted
-- [ ] Local branch `test/ci-failure-evidence` deleted
-- [ ] `main` worktree restored without temporary code
+- [x] PR #2 closed unmerged
+- [x] Issue #1 closed
+- [x] Remote branch `test/ci-failure-evidence` deleted
+- [x] Local branch `test/ci-failure-evidence` deleted
+- [x] `main` worktree restored without temporary code
 
 ## Verdict
 
