@@ -16,6 +16,7 @@ import (
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/execution"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/state"
+	"github.com/dnieblesdev/dniebles-bootstrap/internal/version"
 )
 
 const (
@@ -77,6 +78,11 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 1 && args[0] == "--version" {
+		fmt.Fprintln(stdout, version.Version)
+		return exitSuccess
+	}
+
 	if len(args) == 0 {
 		printUsage(stderr)
 		fmt.Fprintln(stderr, "error: command is required")

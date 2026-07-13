@@ -1,0 +1,131 @@
+name: release-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to embed in the binary (optional; defaults to git describe)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      safe_version: ${{ steps.resolve.outputs.safe_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Validate version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: go run ./internal/version/cmd/validate --version "${INPUT_VERSION}"
+
+      - name: Resolve version
+        id: resolve
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "${INPUT_VERSION}" ]; then
+            original_version="${INPUT_VERSION}"
+          else
+            original_version="$(git describe --always --dirty)"
+          fi
+          safe_version="$(go run ./internal/version/cmd/normalize --version "${original_version}")"
+          echo "version=${original_version}" >> "$GITHUB_OUTPUT"
+          echo "safe_version=${safe_version}" >> "$GITHUB_OUTPUT"
+
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build ./...
+
+  build:
+    needs: [version, quality]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ''
+            archive_ext: tar.gz
+          - goos: linux
+            goarch: arm64
+            ext: ''
+            archive_ext: tar.gz
+          - goos: windows
+            goarch: amd64
+            ext: .exe
+            archive_ext: zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build and package
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          SAFE_VERSION: ${{ needs.version.outputs.safe_version }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          staging="staging/dbootstrap_${SAFE_VERSION}_${GOOS}_${GOARCH}"
+          mkdir -p "${staging}/catalog"
+          go build -ldflags "-X github.com/dnieblesdev/dniebles-bootstrap/internal/version.Version=${VERSION}" -o "${staging}/dbootstrap${{ matrix.ext }}" ./cmd/dbootstrap
+          cp catalog/bootstrap.toml "${staging}/catalog/"
+
+          mkdir -p dist
+          archive="dbootstrap_${SAFE_VERSION}_${GOOS}_${GOARCH}.${{ matrix.archive_ext }}"
+          if [ "${{ matrix.archive_ext }}" = "tar.gz" ]; then
+            tar -czf "dist/${archive}" -C "${staging}" .
+          else
+            (cd "${staging}" && zip -r "../../dist/${archive}" .)
+          fi
+          (cd dist && sha256sum "${archive}" > "${archive}.sha256")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dbootstrap-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/dbootstrap_${{ needs.version.outputs.safe_version }}_${{ matrix.goos }}_${{ matrix.goarch }}.${{ matrix.archive_ext }}
+            dist/dbootstrap_${{ needs.version.outputs.safe_version }}_${{ matrix.goos }}_${{ matrix.goarch }}.${{ matrix.archive_ext }}.sha256
+          if-no-files-found: error
+
+  upload:
+    needs: [version, build, quality]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: dbootstrap-*
+          merge-multiple: true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dbootstrap-artifacts-${{ needs.version.outputs.safe_version }}
+          path: artifacts/*
+          if-no-files-found: error

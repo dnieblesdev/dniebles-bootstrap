@@ -16,6 +16,7 @@ import (
 	catalogtoml "github.com/dnieblesdev/dniebles-bootstrap/internal/catalog/toml"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/execution"
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
+	"github.com/dnieblesdev/dniebles-bootstrap/internal/version"
 )
 
 const (
@@ -393,6 +394,57 @@ resources = ["dotfile:shell"]
 	}
 	if stderr.String() != "" {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunVersionFlag(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		version    string
+		wantCode   int
+		wantStdout string
+		wantStderr string
+	}{
+		{
+			name:       "default version reports dev",
+			args:       []string{"--version"},
+			wantCode:   exitSuccess,
+			wantStdout: "dev\n",
+			wantStderr: "",
+		},
+		{
+			name:       "injected version is reported",
+			args:       []string{"--version"},
+			version:    "v1.2.3",
+			wantCode:   exitSuccess,
+			wantStdout: "v1.2.3\n",
+			wantStderr: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.version != "" {
+				originalVersion := version.Version
+				version.Version = tt.version
+				t.Cleanup(func() { version.Version = originalVersion })
+			}
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			gotCode := run(tt.args, &stdout, &stderr)
+
+			if gotCode != tt.wantCode {
+				t.Fatalf("run() exit code = %d, want %d", gotCode, tt.wantCode)
+			}
+			if got := stdout.String(); got != tt.wantStdout {
+				t.Fatalf("stdout = %q, want %q", got, tt.wantStdout)
+			}
+			if got := stderr.String(); got != tt.wantStderr {
+				t.Fatalf("stderr = %q, want %q", got, tt.wantStderr)
+			}
+		})
 	}
 }
 
