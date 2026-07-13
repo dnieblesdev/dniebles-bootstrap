@@ -9,7 +9,8 @@ Define GitHub Release publication from verified build artifacts.
 ### Requirement: Validate the release tag
 
 The publish workflow MUST require a `v`-prefixed strict SemVer input and use it
-as both build version and release tag, rejecting invalid input before side effects.
+as both build version and release tag, rejecting invalid input before either
+downstream build or publication job can run.
 
 #### Scenario: Valid stable version
 
@@ -42,14 +43,27 @@ from its called build, verifying checksums before publication and never altering
 
 ### Requirement: Restrict publication authority
 
-Only the publication job MAY have contents write permission. The called build
-MUST retain read-only access, and manual builds MUST remain artifact-only.
+The workflow-level permissions mapping MUST contain only `contents: read`.
+Only the publication job MAY have `contents: write` and `actions: read`; the
+called build MUST retain read-only access, and manual builds MUST remain
+artifact-only. No global `actions: write` permission MAY be granted.
 
 #### Scenario: Permissions are inspected
 
 - GIVEN either workflow is evaluated
 - WHEN its effective job permissions are inspected
 - THEN only the publish job has `contents: write`
+
+### Requirement: Preserve non-permission behavior
+
+Removing the unused global write grant MUST NOT change release triggers, version
+validation, artifact identity, checksum verification, or publication outcomes.
+
+#### Scenario: Workflow behavior remains unchanged
+
+- GIVEN the workflow is run with a valid or invalid version
+- WHEN the workflow completes or fails validation
+- THEN its observable behavior matches the pre-change workflow except for the removed permission
 
 ### Requirement: Prevent overwrites and capture evidence
 
