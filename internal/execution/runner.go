@@ -8,7 +8,10 @@ import (
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 )
 
-var ErrBrewFormulaPresenceUnknown = errors.New("Homebrew formula presence could not be determined")
+var (
+	ErrBrewFormulaPresenceUnknown = errors.New("Homebrew formula presence could not be determined")
+	ErrAptPackagePresenceUnknown  = errors.New("APT package presence could not be determined")
+)
 
 // Runner executes a planning.Plan sequentially, dispatching each step to the
 // Installer registered for the step's resource kind.
@@ -31,7 +34,7 @@ func NewRunner(installers ...Installer) *Runner {
 func (r *Runner) Run(ctx context.Context, plan planning.Plan) ExecutionReport {
 	report := ExecutionReport{Results: make([]StepResult, 0, len(plan.Steps))}
 	for _, step := range plan.Steps {
-		if isAlreadyInstalledCommandStep(step) || isInstalledBrewFormulaStep(step) {
+		if isAlreadyInstalledCommandStep(step) || isInstalledBrewFormulaStep(step) || isInstalledAptPackageStep(step) {
 			report.Results = append(report.Results, StepResult{
 				Ref:     step.Ref,
 				Status:  StepStatusSkipped,
@@ -45,6 +48,15 @@ func (r *Runner) Run(ctx context.Context, plan planning.Plan) ExecutionReport {
 				Status:  StepStatusFailed,
 				Message: "Homebrew formula presence could not be determined; no mutation attempted",
 				Err:     ErrBrewFormulaPresenceUnknown,
+			})
+			continue
+		}
+		if isUnknownAptPackageStep(step) {
+			report.Results = append(report.Results, StepResult{
+				Ref:     step.Ref,
+				Status:  StepStatusFailed,
+				Message: "APT package presence could not be determined; no mutation attempted",
+				Err:     ErrAptPackagePresenceUnknown,
 			})
 			continue
 		}
@@ -81,5 +93,20 @@ func isEligibleBrewFormulaStep(step planning.PlanStep) bool {
 	return step.Ref.Kind == planning.ResourceKindPackage &&
 		step.Resource.Install != nil &&
 		step.Resource.Install.Provider == "brew" &&
+		strings.TrimSpace(step.Resource.Install.Package) != ""
+}
+
+func isInstalledAptPackageStep(step planning.PlanStep) bool {
+	return isEligibleAptPackageStep(step) && step.PackagePresence == planning.PackagePresenceInstalled
+}
+
+func isUnknownAptPackageStep(step planning.PlanStep) bool {
+	return isEligibleAptPackageStep(step) && step.PackagePresence == planning.PackagePresenceUnknown
+}
+
+func isEligibleAptPackageStep(step planning.PlanStep) bool {
+	return step.Ref.Kind == planning.ResourceKindPackage &&
+		step.Resource.Install != nil &&
+		step.Resource.Install.Provider == "apt" &&
 		strings.TrimSpace(step.Resource.Install.Package) != ""
 }

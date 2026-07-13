@@ -159,6 +159,17 @@ func runApplyLike(command string, args []string, stdout, stderr io.Writer) int {
 		}.Detect(context.Background(), result.Plan)
 		executionPlan = state.ApplyBrewFormulaPresence(result.Plan, presence)
 	}
+	if isConfirmedMode(mode) && facts.OS == "linux" && planHasEligibleAptPackage(result.Plan) {
+		var presenceRunner execution.CommandRunner
+		if aptCommandExists("dpkg-query") {
+			presenceRunner = newOSCommandRunner()
+		}
+		presence := state.AptPackageDetector{
+			CommandExists: aptCommandExists,
+			Runner:        presenceRunner,
+		}.Detect(context.Background(), result.Plan)
+		executionPlan = state.ApplyAptPackagePresence(executionPlan, presence)
+	}
 	runner := buildApplyRunner(mode, facts, executionPlan)
 	if !isConfirmedMode(mode) {
 		executionPlan.Steps = append([]planning.PlanStep(nil), result.Plan.Steps...)
@@ -277,6 +288,16 @@ func planHasEligibleBrewFormulaPackage(plan planning.Plan) bool {
 	for _, step := range plan.Steps {
 		if step.Ref.Kind == planning.ResourceKindPackage && step.Resource.Install != nil &&
 			step.Resource.Install.Provider == "brew" && strings.TrimSpace(step.Resource.Install.Package) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func planHasEligibleAptPackage(plan planning.Plan) bool {
+	for _, step := range plan.Steps {
+		if step.Ref.Kind == planning.ResourceKindPackage && step.Resource.Install != nil &&
+			step.Resource.Install.Provider == "apt" && strings.TrimSpace(step.Resource.Install.Package) != "" {
 			return true
 		}
 	}

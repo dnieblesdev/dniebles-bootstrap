@@ -44,6 +44,31 @@ Planning failures MUST stop the command before execution begins.
 - WHEN `dbootstrap apply` runs
 - THEN the resulting plan is passed into execution
 
+### Requirement: APT detection is confirmed-Linux-only
+
+The CLI MUST compose APT detection only for confirmed Linux `apply --yes` and `bootstrap` APT steps. APT presence MUST be installed only for a well-formed status whose error field is `ok` and package-status field is `installed`, including `hold ok installed`. Partial states such as `unpacked` or `half-configured` MUST remain executable rather than being skipped. Default, dry-run, planning-only, and non-Linux flows MUST NOT probe `dpkg-query`; non-Linux confirmed APT steps MUST fail without probes.
+
+#### Scenario: Definitive not-found reaches installer
+- GIVEN confirmed Linux `apply --yes` or `bootstrap` has an eligible absent package
+- WHEN the query exits 1 with matching `no packages found matching <package>` stderr and no contradictory stdout
+- THEN it is classified absent and dispatched through the normal APT installer
+- AND no retry, fallback, or alternate probe occurs
+
+#### Scenario: Held installed package is skipped
+- GIVEN confirmed Linux `apply --yes` or `bootstrap` returns `hold ok installed`
+- WHEN execution processes the package
+- THEN it reports unchanged without dispatching APT
+
+#### Scenario: Partial package state is not skipped
+- GIVEN confirmed Linux `apply --yes` or `bootstrap` returns `install ok unpacked` or `install ok half-configured`
+- WHEN execution processes the package
+- THEN it dispatches the normal APT installer
+
+#### Scenario: Safe or non-Linux modes do not probe
+- GIVEN a safe-mode or non-Linux command has APT-backed resources
+- WHEN it runs
+- THEN none of `dpkg-query`, `apt-get`, or `sudo` is invoked
+
 ### Requirement: Apply execution summary is always rendered
 
 The apply command MUST render a Summary section in default, `--dry-run`, and `--yes` modes when execution results exist.
@@ -307,7 +332,7 @@ Apply MUST preserve the original plan order in every mode. Idempotency handling 
 
 ### Requirement: Apply safety boundaries exclude broader convergence
 
-The idempotency promise MUST be limited to reliable command-presence detection for eligible tools and runtimes. Apply MUST NOT use package presence, package version, configuration state, dotfile-link content, retries, rollback, or bootstrap acquisition to decide that a step is unchanged or to make it converge.
+The idempotency promise MUST be limited to reliable command-presence detection for eligible tools and runtimes and three-state APT presence on confirmed Linux. Apply MUST NOT use package version, configuration state, dotfile-link content, retries, rollback, or bootstrap acquisition to decide that a step is unchanged or to make it converge. Unknown APT evidence MUST fail safely without installer dispatch.
 
 #### Scenario: Dotfile module presence is not link convergence
 
@@ -331,8 +356,3 @@ The idempotency promise MUST be limited to reliable command-presence detection f
 - AND apply does not acquire or install the bootstrap dependency
 
 ## REMOVED Requirements
-
-### Requirement: No apply command is introduced
-
-(Reason: `apply` is now intentionally added as a functional CLI bridge: default and `--dry-run` stay non-mutating, while `--yes` may run the narrow confirmed Homebrew path.)
-(Migration: Replace this gate with functional `apply` coverage.)

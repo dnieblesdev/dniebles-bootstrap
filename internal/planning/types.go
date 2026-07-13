@@ -101,7 +101,7 @@ type Plan struct {
 	Steps []PlanStep
 }
 
-// PackagePresence is a transient execution-time Brew formula presence result.
+// PackagePresence is a transient execution-time provider-specific package presence result.
 type PackagePresence string
 
 const (
@@ -119,7 +119,7 @@ type PlanStep struct {
 	AttentionReasons []string
 	// Status carries the planning-time status for this ordered executable step.
 	Status PlanStepStatus
-	// PackagePresence is set only on an execution-plan copy after confirmed Brew probing.
+	// PackagePresence is set only on an execution-plan copy after confirmed provider probing.
 	PackagePresence PackagePresence
 }
 

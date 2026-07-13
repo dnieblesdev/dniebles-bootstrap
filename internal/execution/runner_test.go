@@ -185,11 +185,11 @@ func TestRunnerHonorsEligibleBrewFormulaPresence(t *testing.T) {
 	}
 }
 
-func TestRunnerIgnoresPackagePresenceForInvalidBrewPackage(t *testing.T) {
+func TestRunnerIgnoresPackagePresenceForNonMatchingProvider(t *testing.T) {
 	installer := &fakeInstaller{kind: planning.ResourceKindPackage}
 	step := planning.PlanStep{
 		Ref:             planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "jq"},
-		Resource:        planning.Resource{Install: &planning.InstallMetadata{Provider: "apt", Package: "jq"}},
+		Resource:        planning.Resource{Install: &planning.InstallMetadata{Provider: "other", Package: "jq"}},
 		PackagePresence: planning.PackagePresenceInstalled,
 	}
 	report := NewRunner(installer).Run(context.Background(), planning.Plan{Steps: []planning.PlanStep{step}})
@@ -198,6 +198,175 @@ func TestRunnerIgnoresPackagePresenceForInvalidBrewPackage(t *testing.T) {
 	}
 	if got := len(installer.calls); got != 1 {
 		t.Fatalf("installer calls = %d, want 1", got)
+	}
+}
+
+func TestRunnerHonorsEligibleAptPackagePresence(t *testing.T) {
+	installed := planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "held-pkg"}
+	absent := planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "missing-pkg"}
+	unknown := planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "ambiguous-pkg"}
+	packageInstaller := &fakeInstaller{kind: planning.ResourceKindPackage}
+	runner := NewRunner(packageInstaller)
+	report := runner.Run(context.Background(), planning.Plan{Steps: []planning.PlanStep{
+		{Ref: installed, Resource: planning.Resource{Install: &planning.InstallMetadata{Provider: "apt", Package: "held-pkg"}}, PackagePresence: planning.PackagePresenceInstalled},
+		{Ref: absent, Resource: planning.Resource{Install: &planning.InstallMetadata{Provider: "apt", Package: "missing-pkg"}}, PackagePresence: planning.PackagePresenceAbsent},
+		{Ref: unknown, Resource: planning.Resource{Install: &planning.InstallMetadata{Provider: "apt", Package: "ambiguous-pkg"}}, PackagePresence: planning.PackagePresenceUnknown},
+	}})
+
+	if got := report.Results[0]; got.Status != StepStatusSkipped || got.Message != "already installed; no mutation attempted" {
+		t.Fatalf("installed result = %#v", got)
+	}
+	if got := report.Results[1]; got.Status != StepStatusInstalled {
+		t.Fatalf("absent result = %#v, want existing installer dispatch", got)
+	}
+	if got := report.Results[2]; got.Status != StepStatusFailed || got.Message != "APT package presence could not be determined; no mutation attempted" || got.Err == nil {
+		t.Fatalf("unknown result = %#v", got)
+	}
+	if got, want := len(packageInstaller.calls), 1; got != want || packageInstaller.calls[0].Ref != absent {
+		t.Fatalf("installer calls = %#v, want absent step only", packageInstaller.calls)
+	}
+}
+
+func TestRunnerAptPartialStatesDispatch(t *testing.T) {
+	packageInstaller := &fakeInstaller{
+		kind: planning.ResourceKindPackage,
+		results: []StepResult{
+			{Ref: planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "unpacked-pkg"}, Status: StepStatusInstalled},
+			{Ref: planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "half-configured-pkg"}, Status: StepStatusInstalled},
+		},
+	}
+	runner := NewRunner(packageInstaller)
+	report := runner.Run(context.Background(), planning.Plan{Steps: []planning.PlanStep{
+		{Ref: planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "unpacked-pkg"}, Resource: planning.Resource{Install: &planning.InstallMetadata{Provider: "apt", Package: "unpacked-pkg"}}, PackagePresence: planning.PackagePresenceAbsent},
+		{Ref: planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "half-configured-pkg"}, Resource: planning.Resource{Install: &planning.InstallMetadata{Provider: "apt", Package: "half-configured-pkg"}}, PackagePresence: planning.PackagePresenceAbsent},
+	}})
+
+	if got, want := len(report.Results), 2; got != want {
+		t.Fatalf("result count = %d, want %d", got, want)
+	}
+	for i, want := range []StepStatus{StepStatusInstalled, StepStatusInstalled} {
+		if report.Results[i].Status != want {
+			t.Fatalf("result[%d].Status = %q, want %q", i, report.Results[i].Status, want)
+		}
+	}
+	if got, want := len(packageInstaller.calls), 2; got != want {
+		t.Fatalf("installer calls = %d, want %d", got, want)
+	}
+}
+
+func TestRunnerPreservesOrderWithAptPresence(t *testing.T) {
+	a := planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "a"}
+	b := planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "b"}
+	c := planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "c"}
+	packageInstaller := &fakeInstaller{
+		kind: planning.ResourceKindPackage,
+		results: []StepResult{
+			{Ref: c, Status: StepStatusInstalled},
+		},
+	}
+	toolInstaller := &fakeInstaller{kind: planning.ResourceKindTool}
+	runner := NewRunner(packageInstaller, toolInstaller)
+	report := runner.Run(context.Background(), planning.Plan{Steps: []planning.PlanStep{
+		{Ref: a, Resource: planning.Resource{Install: &planning.InstallMetadata{Provider: "apt", Package: "a"}}, PackagePresence: planning.PackagePresenceInstalled},
+		{Ref: b, Resource: planning.Resource{Ref: b}},
+		{Ref: c, Resource: planning.Resource{Install: &planning.InstallMetadata{Provider: "apt", Package: "c"}}, PackagePresence: planning.PackagePresenceAbsent},
+	}})
+
+	wantOrder := []planning.ResourceRef{a, b, c}
+	if got := len(report.Results); got != len(wantOrder) {
+		t.Fatalf("result count = %d, want %d", got, len(wantOrder))
+	}
+	for i, want := range wantOrder {
+		if report.Results[i].Ref != want {
+			t.Fatalf("result[%d].Ref = %#v, want %#v", i, report.Results[i].Ref, want)
+		}
+	}
+	if report.Results[0].Status != StepStatusSkipped {
+		t.Fatalf("result[0].Status = %q, want skipped", report.Results[0].Status)
+	}
+	if report.Results[1].Status != StepStatusInstalled {
+		t.Fatalf("result[1].Status = %q, want installed", report.Results[1].Status)
+	}
+	if report.Results[2].Status != StepStatusInstalled {
+		t.Fatalf("result[2].Status = %q, want installed", report.Results[2].Status)
+	}
+	if len(packageInstaller.calls) != 1 || packageInstaller.calls[0].Ref != c {
+		t.Fatalf("package installer calls = %#v, want c only", packageInstaller.calls)
+	}
+	if len(toolInstaller.calls) != 1 || toolInstaller.calls[0].Ref != b {
+		t.Fatalf("tool installer calls = %#v, want b only", toolInstaller.calls)
+	}
+}
+
+func TestRunnerIgnoresPackagePresenceForInvalidAptPackage(t *testing.T) {
+	installer := &fakeInstaller{kind: planning.ResourceKindPackage}
+	step := planning.PlanStep{
+		Ref:             planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "jq"},
+		Resource:        planning.Resource{Install: &planning.InstallMetadata{Provider: "apt", Package: ""}},
+		PackagePresence: planning.PackagePresenceInstalled,
+	}
+	report := NewRunner(installer).Run(context.Background(), planning.Plan{Steps: []planning.PlanStep{step}})
+	if got := report.Results[0].Status; got != StepStatusInstalled {
+		t.Fatalf("status = %q, want installer dispatch", got)
+	}
+	if got := len(installer.calls); got != 1 {
+		t.Fatalf("installer calls = %d, want 1", got)
+	}
+}
+
+func TestRunnerIgnoresAptPresenceForBrewPackage(t *testing.T) {
+	installer := &fakeInstaller{kind: planning.ResourceKindPackage}
+	step := planning.PlanStep{
+		Ref:             planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "jq"},
+		Resource:        planning.Resource{Install: &planning.InstallMetadata{Provider: "brew", Package: "jq"}},
+		PackagePresence: planning.PackagePresenceInstalled,
+	}
+	report := NewRunner(installer).Run(context.Background(), planning.Plan{Steps: []planning.PlanStep{step}})
+	if got := report.Results[0].Status; got != StepStatusSkipped {
+		t.Fatalf("status = %q, want brew skip", got)
+	}
+	if got := len(installer.calls); got != 0 {
+		t.Fatalf("installer calls = %d, want 0", got)
+	}
+}
+
+func TestRunnerAptUncheckedPresenceDispatches(t *testing.T) {
+	installer := &fakeInstaller{kind: planning.ResourceKindPackage}
+	step := planning.PlanStep{
+		Ref:             planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "jq"},
+		Resource:        planning.Resource{Install: &planning.InstallMetadata{Provider: "apt", Package: "jq"}},
+		PackagePresence: planning.PackagePresenceUnchecked,
+	}
+	report := NewRunner(installer).Run(context.Background(), planning.Plan{Steps: []planning.PlanStep{step}})
+	if got := report.Results[0].Status; got != StepStatusInstalled {
+		t.Fatalf("status = %q, want installer dispatch", got)
+	}
+	if got := len(installer.calls); got != 1 {
+		t.Fatalf("installer calls = %d, want 1", got)
+	}
+}
+
+func TestRunnerAptIneligibleStepIgnoresPresence(t *testing.T) {
+	toolInstaller := &fakeInstaller{kind: planning.ResourceKindTool}
+	pkgInstaller := &fakeInstaller{kind: planning.ResourceKindPackage}
+	report := NewRunner(toolInstaller, pkgInstaller).Run(context.Background(), planning.Plan{Steps: []planning.PlanStep{
+		{Ref: planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "jq"}, Resource: planning.Resource{Ref: planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "jq"}}, PackagePresence: planning.PackagePresenceInstalled},
+		{Ref: planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "jq"}, Resource: planning.Resource{Install: &planning.InstallMetadata{Provider: "apt", Package: "jq"}}, PackagePresence: planning.PackagePresenceInstalled},
+	}})
+	if got, want := len(report.Results), 2; got != want {
+		t.Fatalf("result count = %d, want %d", got, want)
+	}
+	if report.Results[0].Status != StepStatusInstalled {
+		t.Fatalf("tool status = %q, want installed", report.Results[0].Status)
+	}
+	if report.Results[1].Status != StepStatusSkipped {
+		t.Fatalf("apt status = %q, want skipped", report.Results[1].Status)
+	}
+	if got := len(toolInstaller.calls); got != 1 {
+		t.Fatalf("tool installer calls = %d, want 1", got)
+	}
+	if got := len(pkgInstaller.calls); got != 0 {
+		t.Fatalf("package installer calls = %d, want 0", got)
 	}
 }
 

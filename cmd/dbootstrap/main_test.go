@@ -1045,7 +1045,14 @@ resources = ["tool:fd", "package:ripgrep", "runtime:go"]
 	stubConfigState(t, planning.ConfigState{})
 	stubDotfilesState(t, planning.InstallationState{})
 	stubBrewCommandExists(t, true)
-	runner := &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded, ExitCode: 0}}
+	originalExists := aptCommandExists
+	aptCommandExists = func(name string) bool { return name == "dpkg-query" || name == "apt-get" }
+	t.Cleanup(func() { aptCommandExists = originalExists })
+	runner := &sequenceCommandRunner{results: []execution.CommandResult{
+		{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching ripgrep", Err: errors.New("exit 1")},
+		{Status: execution.CommandStatusSucceeded, ExitCode: 0},
+		{Status: execution.CommandStatusSucceeded, ExitCode: 0},
+	}}
 	stubExecutionFactories(t,
 		func() execution.CommandRunner { return runner },
 		func(kind planning.ResourceKind, commandRunner execution.CommandRunner, exists execution.CommandExists) execution.Installer {
@@ -1064,13 +1071,16 @@ resources = ["tool:fd", "package:ripgrep", "runtime:go"]
 	if gotCode != exitSuccess {
 		t.Fatalf("run() exit code = %d, want %d", gotCode, exitSuccess)
 	}
-	if len(runner.calls) != 2 {
-		t.Fatalf("command runner calls = %d, want 2", len(runner.calls))
+	if len(runner.calls) != 3 {
+		t.Fatalf("command runner calls = %d, want 3", len(runner.calls))
 	}
-	if got := runner.calls[0]; got.Executable != "apt-get" || strings.Join(got.Args, " ") != "install -y -- ripgrep" {
+	if got := runner.calls[0]; got.Executable != "dpkg-query" || strings.Join(got.Args, " ") != "--show --showformat=${Status} ripgrep" {
+		t.Fatalf("CommandRequest = %#v, want dpkg-query --show --showformat=${Status} ripgrep", got)
+	}
+	if got := runner.calls[1]; got.Executable != "apt-get" || strings.Join(got.Args, " ") != "install -y -- ripgrep" {
 		t.Fatalf("CommandRequest = %#v, want apt-get install -y -- ripgrep", got)
 	}
-	if got := runner.calls[1]; got.Executable != "brew" || strings.Join(got.Args, " ") != "install fd" {
+	if got := runner.calls[2]; got.Executable != "brew" || strings.Join(got.Args, " ") != "install fd" {
 		t.Fatalf("CommandRequest = %#v, want brew install fd", got)
 	}
 	out := stdout.String()
@@ -1087,6 +1097,92 @@ resources = ["tool:fd", "package:ripgrep", "runtime:go"]
 	}
 	if stderr.String() != "" {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunApplyLikeConfirmedMixedBrewAptPreservesBrewPresence(t *testing.T) {
+	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `
+schema = "dniebles.catalog"
+version = 1
+
+[[packages]]
+id = "jq"
+description = "JSON processor"
+[packages.install]
+provider = "brew"
+package = "jq"
+
+[[packages]]
+id = "ripgrep"
+description = "Fast text search"
+[packages.install]
+provider = "apt"
+package = "ripgrep"
+
+[[profiles]]
+id = "dev"
+resources = ["package:jq", "package:ripgrep"]
+`)
+	for _, command := range []string{"apply", "bootstrap"} {
+		t.Run(command, func(t *testing.T) {
+			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+			stubInstallationState(t, planning.InstallationState{})
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+			stubBrewCommandExists(t, true)
+			originalExists := aptCommandExists
+			aptCommandExists = func(name string) bool { return name == "dpkg-query" || name == "apt-get" }
+			t.Cleanup(func() { aptCommandExists = originalExists })
+			runner := &sequenceCommandRunner{results: []execution.CommandResult{
+				{Status: execution.CommandStatusSucceeded, ExitCode: 0},
+				{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching ripgrep", Err: errors.New("exit 1")},
+				{Status: execution.CommandStatusSucceeded, ExitCode: 0},
+			}}
+			stubExecutionFactories(t,
+				func() execution.CommandRunner { return runner },
+				func(kind planning.ResourceKind, commandRunner execution.CommandRunner, exists execution.CommandExists) execution.Installer {
+					return execution.NewHomebrewInstaller(kind, commandRunner, exists)
+				},
+				func(execution.CommandRunner) execution.Installer {
+					t.Fatal("mixed brew+apt apply must not instantiate dotfiles installer")
+					return nil
+				},
+			)
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			gotCode := run([]string{command, "--profile", "dev", "--catalog", catalogPath, "--yes"}, &stdout, &stderr)
+
+			if gotCode != exitSuccess {
+				t.Fatalf("run() exit code = %d, want %d", gotCode, exitSuccess)
+			}
+			if len(runner.calls) != 3 {
+				t.Fatalf("command runner calls = %d, want 3", len(runner.calls))
+			}
+			if got := runner.calls[0]; got.Executable != "brew" || strings.Join(got.Args, " ") != "list --formula jq" {
+				t.Fatalf("CommandRequest = %#v, want brew list --formula jq", got)
+			}
+			if got := runner.calls[1]; got.Executable != "dpkg-query" || strings.Join(got.Args, " ") != "--show --showformat=${Status} ripgrep" {
+				t.Fatalf("CommandRequest = %#v, want dpkg-query --show --showformat=${Status} ripgrep", got)
+			}
+			if got := runner.calls[2]; got.Executable != "apt-get" || strings.Join(got.Args, " ") != "install -y -- ripgrep" {
+				t.Fatalf("CommandRequest = %#v, want apt-get install -y -- ripgrep", got)
+			}
+			out := stdout.String()
+			for _, want := range []string{
+				"Mode: confirmed",
+				"package:jq [unchanged] already installed; no mutation attempted",
+				"package:ripgrep [changed] installed ripgrep with APT",
+				"Manual Actions:\n- none\n",
+			} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("stdout missing %q; got %q", want, out)
+				}
+			}
+			if stderr.String() != "" {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
 	}
 }
 
@@ -1421,23 +1517,136 @@ func TestParseApplyFlagsSudoRequiresConfirmedMode(t *testing.T) {
 
 func TestRunBootstrapAptFixtureContracts(t *testing.T) {
 	for _, tt := range []struct {
-		name, executable string
-		args, arguments  []string
-		facts            planning.EnvironmentFacts
-		available        map[string]bool
-		commandResult    execution.CommandResult
-		wantCode         int
-		wantOutput       string
+		name       string
+		args       []string
+		facts      planning.EnvironmentFacts
+		available  map[string]bool
+		results    []execution.CommandResult
+		wantCode   int
+		wantCalls  []execution.CommandRequest
+		wantOutput string
 	}{
-		{"apt present and brew absent", "apt-get", []string{"--yes"}, []string{"install", "-y", "--", "ripgrep"}, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{"apt-get": true}, execution.CommandResult{Status: execution.CommandStatusSucceeded}, exitSuccess, "package:ripgrep [changed] installed ripgrep with APT"},
-		{"explicit sudo linux", "sudo", []string{"--yes", "--sudo"}, []string{"apt-get", "install", "-y", "--", "ripgrep"}, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{"apt-get": true, "sudo": true}, execution.CommandResult{Status: execution.CommandStatusSucceeded}, exitSuccess, "package:ripgrep [changed] installed ripgrep with APT"},
-		{"missing apt-get fails without command", "", []string{"--yes"}, nil, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{}, execution.CommandResult{}, exitFailure, "package:ripgrep [failed] apt-get executable is not available on PATH"},
-		{"missing sudo fails without command", "", []string{"--yes", "--sudo"}, nil, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{"apt-get": true}, execution.CommandResult{}, exitFailure, "package:ripgrep [failed] sudo executable is not available on PATH"},
-		{"command failure renders and exits non-zero", "apt-get", []string{"--yes"}, []string{"install", "-y", "--", "ripgrep"}, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{"apt-get": true}, execution.CommandResult{Status: execution.CommandStatusFailed}, exitFailure, "package:ripgrep [failed] apt install ripgrep failed with status failed"},
-		{"timeout renders and exits non-zero", "apt-get", []string{"--yes"}, []string{"install", "-y", "--", "ripgrep"}, planning.EnvironmentFacts{OS: "linux"}, map[string]bool{"apt-get": true}, execution.CommandResult{Status: execution.CommandStatusTimedOut}, exitFailure, "package:ripgrep [failed] apt install ripgrep failed with status timed_out"},
-		{"non linux fails without probe", "", []string{"--yes"}, nil, planning.EnvironmentFacts{OS: "darwin"}, nil, execution.CommandResult{}, exitFailure, "package:ripgrep [failed] apt execution unsupported_os on darwin (command status not_run)"},
-		{"default does not probe", "", nil, nil, planning.EnvironmentFacts{OS: "linux"}, nil, execution.CommandResult{}, exitSuccess, "package:ripgrep [not supported yet] noop installer does not perform real installation"},
-		{"dry run does not probe", "", []string{"--dry-run"}, nil, planning.EnvironmentFacts{OS: "linux"}, nil, execution.CommandResult{}, exitSuccess, "package:ripgrep [not supported yet] noop installer does not perform real installation"},
+		{
+			name:      "apt present and brew absent",
+			args:      []string{"--yes"},
+			facts:     planning.EnvironmentFacts{OS: "linux"},
+			available: map[string]bool{"dpkg-query": true, "apt-get": true},
+			results: []execution.CommandResult{
+				{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching ripgrep", Err: errors.New("exit 1")},
+				{Status: execution.CommandStatusSucceeded},
+			},
+			wantCode: exitSuccess,
+			wantCalls: []execution.CommandRequest{
+				{Executable: "dpkg-query", Args: []string{"--show", "--showformat=${Status}", "ripgrep"}, Timeout: 30 * time.Second},
+				{Executable: "apt-get", Args: []string{"install", "-y", "--", "ripgrep"}, Timeout: 10 * time.Minute},
+			},
+			wantOutput: "package:ripgrep [changed] installed ripgrep with APT",
+		},
+		{
+			name:      "explicit sudo linux",
+			args:      []string{"--yes", "--sudo"},
+			facts:     planning.EnvironmentFacts{OS: "linux"},
+			available: map[string]bool{"dpkg-query": true, "apt-get": true, "sudo": true},
+			results: []execution.CommandResult{
+				{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching ripgrep", Err: errors.New("exit 1")},
+				{Status: execution.CommandStatusSucceeded},
+			},
+			wantCode: exitSuccess,
+			wantCalls: []execution.CommandRequest{
+				{Executable: "dpkg-query", Args: []string{"--show", "--showformat=${Status}", "ripgrep"}, Timeout: 30 * time.Second},
+				{Executable: "sudo", Args: []string{"apt-get", "install", "-y", "--", "ripgrep"}, Timeout: 10 * time.Minute},
+			},
+			wantOutput: "package:ripgrep [changed] installed ripgrep with APT",
+		},
+		{
+			name:      "missing apt-get fails without command",
+			args:      []string{"--yes"},
+			facts:     planning.EnvironmentFacts{OS: "linux"},
+			available: map[string]bool{"dpkg-query": true},
+			results: []execution.CommandResult{
+				{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching ripgrep", Err: errors.New("exit 1")},
+			},
+			wantCode: exitFailure,
+			wantCalls: []execution.CommandRequest{
+				{Executable: "dpkg-query", Args: []string{"--show", "--showformat=${Status}", "ripgrep"}, Timeout: 30 * time.Second},
+			},
+			wantOutput: "package:ripgrep [failed] apt-get executable is not available on PATH",
+		},
+		{
+			name:      "missing sudo fails without command",
+			args:      []string{"--yes", "--sudo"},
+			facts:     planning.EnvironmentFacts{OS: "linux"},
+			available: map[string]bool{"dpkg-query": true, "apt-get": true},
+			results: []execution.CommandResult{
+				{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching ripgrep", Err: errors.New("exit 1")},
+			},
+			wantCode: exitFailure,
+			wantCalls: []execution.CommandRequest{
+				{Executable: "dpkg-query", Args: []string{"--show", "--showformat=${Status}", "ripgrep"}, Timeout: 30 * time.Second},
+			},
+			wantOutput: "package:ripgrep [failed] sudo executable is not available on PATH",
+		},
+		{
+			name:      "command failure renders and exits non-zero",
+			args:      []string{"--yes"},
+			facts:     planning.EnvironmentFacts{OS: "linux"},
+			available: map[string]bool{"dpkg-query": true, "apt-get": true},
+			results: []execution.CommandResult{
+				{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching ripgrep", Err: errors.New("exit 1")},
+				{Status: execution.CommandStatusFailed},
+			},
+			wantCode: exitFailure,
+			wantCalls: []execution.CommandRequest{
+				{Executable: "dpkg-query", Args: []string{"--show", "--showformat=${Status}", "ripgrep"}, Timeout: 30 * time.Second},
+				{Executable: "apt-get", Args: []string{"install", "-y", "--", "ripgrep"}, Timeout: 10 * time.Minute},
+			},
+			wantOutput: "package:ripgrep [failed] apt install ripgrep failed with status failed",
+		},
+		{
+			name:      "timeout renders and exits non-zero",
+			args:      []string{"--yes"},
+			facts:     planning.EnvironmentFacts{OS: "linux"},
+			available: map[string]bool{"dpkg-query": true, "apt-get": true},
+			results: []execution.CommandResult{
+				{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching ripgrep", Err: errors.New("exit 1")},
+				{Status: execution.CommandStatusTimedOut},
+			},
+			wantCode: exitFailure,
+			wantCalls: []execution.CommandRequest{
+				{Executable: "dpkg-query", Args: []string{"--show", "--showformat=${Status}", "ripgrep"}, Timeout: 30 * time.Second},
+				{Executable: "apt-get", Args: []string{"install", "-y", "--", "ripgrep"}, Timeout: 10 * time.Minute},
+			},
+			wantOutput: "package:ripgrep [failed] apt install ripgrep failed with status timed_out",
+		},
+		{
+			name:       "non linux fails without probe",
+			args:       []string{"--yes"},
+			facts:      planning.EnvironmentFacts{OS: "darwin"},
+			available:  nil,
+			results:    nil,
+			wantCode:   exitFailure,
+			wantCalls:  nil,
+			wantOutput: "package:ripgrep [failed] apt execution unsupported_os on darwin (command status not_run)",
+		},
+		{
+			name:       "default does not probe",
+			facts:      planning.EnvironmentFacts{OS: "linux"},
+			available:  nil,
+			results:    nil,
+			wantCode:   exitSuccess,
+			wantCalls:  nil,
+			wantOutput: "package:ripgrep [not supported yet] noop installer does not perform real installation",
+		},
+		{
+			name:       "dry run does not probe",
+			args:       []string{"--dry-run"},
+			facts:      planning.EnvironmentFacts{OS: "linux"},
+			available:  nil,
+			results:    nil,
+			wantCode:   exitSuccess,
+			wantCalls:  nil,
+			wantOutput: "package:ripgrep [not supported yet] noop installer does not perform real installation",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			stubEnvironmentFacts(t, tt.facts)
@@ -1453,19 +1662,30 @@ func TestRunBootstrapAptFixtureContracts(t *testing.T) {
 				return tt.available[name]
 			}
 			t.Cleanup(func() { aptCommandExists = originalExists })
-			runner := &recordingCommandRunner{result: tt.commandResult}
+
+			var runner execution.CommandRunner
+			if tt.results != nil {
+				runner = &sequenceCommandRunner{results: tt.results}
+			} else {
+				runner = &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded}}
+			}
 			stubExecutionFactories(t, func() execution.CommandRunner { return runner }, newHomebrewInstaller, newDotfilesInstaller)
+
 			args := append([]string{"bootstrap", "--profile", "apt-fixture", "--catalog", writeAptCatalog(t)}, tt.args...)
 			var stdout, stderr bytes.Buffer
 			if code := run(args, &stdout, &stderr); code != tt.wantCode {
 				t.Fatalf("exit code = %d, want %d; stdout=%q stderr=%q", code, tt.wantCode, stdout.String(), stderr.String())
 			}
-			if tt.executable == "" {
-				if len(runner.calls) != 0 {
-					t.Fatalf("command calls = %#v, want none", runner.calls)
-				}
-			} else if len(runner.calls) != 1 || runner.calls[0].Executable != tt.executable || strings.Join(runner.calls[0].Args, "|") != strings.Join(tt.arguments, "|") || runner.calls[0].Timeout != 10*time.Minute {
-				t.Fatalf("command calls = %#v, want %s %#v with ten-minute timeout", runner.calls, tt.executable, tt.arguments)
+
+			var calls []execution.CommandRequest
+			switch r := runner.(type) {
+			case *sequenceCommandRunner:
+				calls = r.calls
+			case *recordingCommandRunner:
+				calls = r.calls
+			}
+			if !reflect.DeepEqual(calls, tt.wantCalls) {
+				t.Fatalf("command calls = %#v, want %#v", calls, tt.wantCalls)
 			}
 			if !strings.Contains(stdout.String(), tt.wantOutput) {
 				t.Fatalf("stdout = %q, want it to contain %q", stdout.String(), tt.wantOutput)
@@ -1811,6 +2031,193 @@ func (r *sequenceCommandRunner) RunCommand(_ context.Context, req execution.Comm
 	return result
 }
 
+func TestRunApplyAndBootstrapAptPackageDetection(t *testing.T) {
+	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `
+schema = "dniebles.catalog"
+version = 1
+
+[[packages]]
+id = "ripgrep"
+description = "Fast text search"
+[packages.install]
+provider = "apt"
+package = "ripgrep"
+
+[[profiles]]
+id = "dev"
+resources = ["package:ripgrep"]
+`)
+	tests := []struct {
+		name       string
+		command    string
+		args       []string
+		facts      planning.EnvironmentFacts
+		available  map[string]bool
+		results    []execution.CommandResult
+		wantCode   int
+		wantCalls  []execution.CommandRequest
+		wantOutput string
+	}{
+		{
+			name:      "apply linux installed hold skips apt-get",
+			command:   "apply",
+			args:      []string{"--profile", "dev", "--catalog", catalogPath, "--yes"},
+			facts:     planning.EnvironmentFacts{OS: "linux"},
+			available: map[string]bool{"dpkg-query": true, "apt-get": true},
+			results: []execution.CommandResult{
+				{Status: execution.CommandStatusSucceeded, ExitCode: 0, Stdout: "hold ok installed"},
+			},
+			wantCode: exitSuccess,
+			wantCalls: []execution.CommandRequest{
+				{Executable: "dpkg-query", Args: []string{"--show", "--showformat=${Status}", "ripgrep"}, Timeout: 30 * time.Second},
+			},
+			wantOutput: "package:ripgrep [unchanged] already installed; no mutation attempted",
+		},
+		{
+			name:      "bootstrap linux partial dispatches apt-get",
+			command:   "bootstrap",
+			args:      []string{"--profile", "dev", "--catalog", catalogPath, "--yes"},
+			facts:     planning.EnvironmentFacts{OS: "linux"},
+			available: map[string]bool{"dpkg-query": true, "apt-get": true},
+			results: []execution.CommandResult{
+				{Status: execution.CommandStatusSucceeded, ExitCode: 0, Stdout: "install ok unpacked"},
+				{Status: execution.CommandStatusSucceeded, ExitCode: 0},
+			},
+			wantCode: exitSuccess,
+			wantCalls: []execution.CommandRequest{
+				{Executable: "dpkg-query", Args: []string{"--show", "--showformat=${Status}", "ripgrep"}, Timeout: 30 * time.Second},
+				{Executable: "apt-get", Args: []string{"install", "-y", "--", "ripgrep"}, Timeout: 10 * time.Minute},
+			},
+			wantOutput: "package:ripgrep [changed] installed ripgrep with APT",
+		},
+		{
+			name:      "apply linux not found dispatches apt-get",
+			command:   "apply",
+			args:      []string{"--profile", "dev", "--catalog", catalogPath, "--yes"},
+			facts:     planning.EnvironmentFacts{OS: "linux"},
+			available: map[string]bool{"dpkg-query": true, "apt-get": true},
+			results: []execution.CommandResult{
+				{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching ripgrep", Err: errors.New("exit 1")},
+				{Status: execution.CommandStatusSucceeded, ExitCode: 0},
+			},
+			wantCode: exitSuccess,
+			wantCalls: []execution.CommandRequest{
+				{Executable: "dpkg-query", Args: []string{"--show", "--showformat=${Status}", "ripgrep"}, Timeout: 30 * time.Second},
+				{Executable: "apt-get", Args: []string{"install", "-y", "--", "ripgrep"}, Timeout: 10 * time.Minute},
+			},
+			wantOutput: "package:ripgrep [changed] installed ripgrep with APT",
+		},
+		{
+			name:      "apply linux unknown does not dispatch apt-get",
+			command:   "apply",
+			args:      []string{"--profile", "dev", "--catalog", catalogPath, "--yes"},
+			facts:     planning.EnvironmentFacts{OS: "linux"},
+			available: map[string]bool{"dpkg-query": true, "apt-get": true},
+			results: []execution.CommandResult{
+				{Status: execution.CommandStatusTimedOut, Err: context.DeadlineExceeded},
+			},
+			wantCode: exitFailure,
+			wantCalls: []execution.CommandRequest{
+				{Executable: "dpkg-query", Args: []string{"--show", "--showformat=${Status}", "ripgrep"}, Timeout: 30 * time.Second},
+			},
+			wantOutput: "package:ripgrep [failed] APT package presence could not be determined; no mutation attempted",
+		},
+		{
+			name:       "default does not probe dpkg-query",
+			command:    "apply",
+			args:       []string{"--profile", "dev", "--catalog", catalogPath},
+			facts:      planning.EnvironmentFacts{OS: "linux"},
+			available:  map[string]bool{},
+			results:    nil,
+			wantCode:   exitSuccess,
+			wantCalls:  nil,
+			wantOutput: "package:ripgrep [not supported yet] noop installer does not perform real installation",
+		},
+		{
+			name:       "dry run does not probe dpkg-query",
+			command:    "apply",
+			args:       []string{"--profile", "dev", "--catalog", catalogPath, "--dry-run"},
+			facts:      planning.EnvironmentFacts{OS: "linux"},
+			available:  map[string]bool{},
+			results:    nil,
+			wantCode:   exitSuccess,
+			wantCalls:  nil,
+			wantOutput: "package:ripgrep [not supported yet] noop installer does not perform real installation",
+		},
+		{
+			name:       "plan does not probe dpkg-query",
+			command:    "plan",
+			args:       []string{"--profile", "dev", "--catalog", catalogPath},
+			facts:      planning.EnvironmentFacts{OS: "linux"},
+			available:  map[string]bool{},
+			results:    nil,
+			wantCode:   exitSuccess,
+			wantCalls:  nil,
+			wantOutput: "package:ripgrep [planned]",
+		},
+		{
+			name:       "non linux confirmed does not probe dpkg-query",
+			command:    "apply",
+			args:       []string{"--profile", "dev", "--catalog", catalogPath, "--yes"},
+			facts:      planning.EnvironmentFacts{OS: "darwin"},
+			available:  map[string]bool{"dpkg-query": true},
+			results:    nil,
+			wantCode:   exitFailure,
+			wantCalls:  nil,
+			wantOutput: "package:ripgrep [failed] apt execution unsupported_os on darwin",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stubEnvironmentFacts(t, tt.facts)
+			stubInstallationState(t, planning.InstallationState{})
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+			stubBrewCommandExists(t, false)
+			originalExists := aptCommandExists
+			aptCommandExists = func(name string) bool {
+				if tt.available == nil {
+					t.Fatalf("command %q must not be probed", name)
+				}
+				return tt.available[name]
+			}
+			t.Cleanup(func() { aptCommandExists = originalExists })
+
+			var runner execution.CommandRunner
+			if tt.results != nil {
+				runner = &sequenceCommandRunner{results: tt.results}
+			} else {
+				runner = &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded}}
+			}
+			stubExecutionFactories(t, func() execution.CommandRunner { return runner }, newHomebrewInstaller, newDotfilesInstaller)
+
+			args := append([]string{tt.command}, tt.args...)
+			var stdout, stderr bytes.Buffer
+			if code := run(args, &stdout, &stderr); code != tt.wantCode {
+				t.Fatalf("exit code = %d, want %d; stdout=%q stderr=%q", code, tt.wantCode, stdout.String(), stderr.String())
+			}
+
+			var calls []execution.CommandRequest
+			switch r := runner.(type) {
+			case *sequenceCommandRunner:
+				calls = r.calls
+			case *recordingCommandRunner:
+				calls = r.calls
+			}
+			if !reflect.DeepEqual(calls, tt.wantCalls) {
+				t.Fatalf("command calls = %#v, want %#v", calls, tt.wantCalls)
+			}
+			if !strings.Contains(stdout.String(), tt.wantOutput) {
+				t.Fatalf("stdout = %q, want it to contain %q", stdout.String(), tt.wantOutput)
+			}
+			if stderr.String() != "" {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
 func TestRunBootstrapHelp(t *testing.T) {
 	for _, tt := range []struct {
 		name       string
@@ -1873,13 +2280,32 @@ func TestRunBootstrapMatchesApplyAcrossSafetyModes(t *testing.T) {
 	for _, tt := range []struct {
 		name           string
 		flags          []string
+		results        []execution.CommandResult
 		wantExecutions int
 		wantExecutable string
 	}{
 		{name: "default", wantExecutions: 0},
 		{name: "dry run", flags: []string{"--dry-run"}, wantExecutions: 0},
-		{name: "confirmed", flags: []string{"--yes"}, wantExecutions: 1, wantExecutable: "apt-get"},
-		{name: "confirmed sudo", flags: []string{"--yes", "--sudo"}, wantExecutions: 1, wantExecutable: "sudo"},
+		{
+			name:  "confirmed",
+			flags: []string{"--yes"},
+			results: []execution.CommandResult{
+				{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching ripgrep", Err: errors.New("exit 1")},
+				{Status: execution.CommandStatusSucceeded},
+			},
+			wantExecutions: 2,
+			wantExecutable: "apt-get",
+		},
+		{
+			name:  "confirmed sudo",
+			flags: []string{"--yes", "--sudo"},
+			results: []execution.CommandResult{
+				{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching ripgrep", Err: errors.New("exit 1")},
+				{Status: execution.CommandStatusSucceeded},
+			},
+			wantExecutions: 2,
+			wantExecutable: "sudo",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			catalogPath := writeAptCatalog(t)
@@ -1888,23 +2314,36 @@ func TestRunBootstrapMatchesApplyAcrossSafetyModes(t *testing.T) {
 			stubConfigState(t, planning.ConfigState{})
 			stubDotfilesState(t, planning.InstallationState{})
 			originalExists := aptCommandExists
-			aptCommandExists = func(name string) bool { return name == "apt-get" || name == "sudo" }
+			aptCommandExists = func(name string) bool { return name == "dpkg-query" || name == "apt-get" || name == "sudo" }
 			t.Cleanup(func() { aptCommandExists = originalExists })
 
 			outputs := make([]string, 0, 2)
 			codes := make([]int, 0, 2)
 			for _, command := range []string{"apply", "bootstrap"} {
-				runner := &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded}}
+				var runner execution.CommandRunner
+				if tt.results != nil {
+					runner = &sequenceCommandRunner{results: tt.results}
+				} else {
+					runner = &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded}}
+				}
 				stubExecutionFactories(t, func() execution.CommandRunner { return runner }, newHomebrewInstaller, newDotfilesInstaller)
 				args := append([]string{command, "--profile", "apt-fixture", "--catalog", catalogPath}, tt.flags...)
 				var stdout, stderr bytes.Buffer
 				codes = append(codes, run(args, &stdout, &stderr))
 				outputs = append(outputs, stdout.String()+stderr.String())
-				if len(runner.calls) != tt.wantExecutions {
-					t.Fatalf("%s command calls = %#v, want %d", command, runner.calls, tt.wantExecutions)
+
+				var calls []execution.CommandRequest
+				switch r := runner.(type) {
+				case *sequenceCommandRunner:
+					calls = r.calls
+				case *recordingCommandRunner:
+					calls = r.calls
 				}
-				if tt.wantExecutable != "" && runner.calls[0].Executable != tt.wantExecutable {
-					t.Fatalf("%s executable = %q, want %q", command, runner.calls[0].Executable, tt.wantExecutable)
+				if len(calls) != tt.wantExecutions {
+					t.Fatalf("%s command calls = %#v, want %d", command, calls, tt.wantExecutions)
+				}
+				if tt.wantExecutable != "" && calls[len(calls)-1].Executable != tt.wantExecutable {
+					t.Fatalf("%s last executable = %q, want %q", command, calls[len(calls)-1].Executable, tt.wantExecutable)
 				}
 			}
 			if codes[0] != codes[1] {
@@ -2115,9 +2554,11 @@ func TestRunBootstrapMatchesApplyForPartialFailure(t *testing.T) {
 		stubConfigState(t, planning.ConfigState{})
 		stubDotfilesState(t, planning.InstallationState{})
 		originalExists := aptCommandExists
-		aptCommandExists = func(name string) bool { return name == "apt-get" }
+		aptCommandExists = func(name string) bool { return name == "dpkg-query" || name == "apt-get" }
 		t.Cleanup(func() { aptCommandExists = originalExists })
 		runner := &sequenceCommandRunner{results: []execution.CommandResult{
+			{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching first", Err: errors.New("exit 1")},
+			{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching second", Err: errors.New("exit 1")},
 			{Status: execution.CommandStatusSucceeded},
 			{Status: execution.CommandStatusFailed},
 		}}
