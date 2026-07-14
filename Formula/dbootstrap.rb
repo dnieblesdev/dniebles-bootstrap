@@ -1,9 +1,9 @@
 class Dbootstrap < Formula
   desc "Apply a declarative developer bootstrap catalog"
   homepage "https://github.com/dnieblesdev/dniebles-bootstrap"
+  url "https://github.com/dnieblesdev/dniebles-bootstrap/releases/download/v0.1.0/dbootstrap_v0.1.0_linux_amd64.tar.gz"
   version "0.1.0"
   license "MIT"
-  url "https://github.com/dnieblesdev/dniebles-bootstrap/releases/download/v0.1.0/dbootstrap_v0.1.0_linux_amd64.tar.gz"
   sha256 "a8f21a55019ff09c08a124f30bffc6831c960be81cbd1496e43b26c92784d109"
 
   on_macos do
