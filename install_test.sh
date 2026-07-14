@@ -128,14 +128,24 @@ test_unsupported_platform() {
 
 # A supported install downloads, verifies, and places both managed files.
 test_supported_install() {
-  local fixtures home
+  local fixtures home url_log mock_http
   fixtures="$(mktemp -d)"
   home="$(mktemp -d)"
+  url_log="$fixtures/download-urls.log"
+  mock_http="$fixtures/mock-http"
   make_home "$home"
   setup_fixtures "$fixtures" "v1.2.3"
 
-  local out code
-  out="$(HOME="$home" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" 2>&1)" && code=0 || code=$?
+  cat > "$mock_http" <<EOF
+#!/bin/bash
+set -euo pipefail
+printf '%s\\n' "\$1" >> "$url_log"
+cat "\${1#file://}"
+EOF
+  chmod +x "$mock_http"
+
+  local out code archive_url
+  out="$(HOME="$home" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" INSTALLER_HTTP_CMD="$mock_http" "$INSTALLER" 2>&1)" && code=0 || code=$?
   if [[ $code -ne 0 ]]; then
     fail "supported install should succeed; output: $out"
     return
@@ -144,6 +154,45 @@ test_supported_install() {
   assert_file_exists "$home/.local/share/dbootstrap/catalog/bootstrap.toml"
   assert_file_exists "$home/.local/share/dbootstrap/install-state.toml"
   assert_contains "$out" "Installed" "install success output"
+  archive_url="$(head -n 2 "$url_log" | tail -n 1)"
+  assert_eq "$archive_url" "file://$fixtures/download/v1.2.3/dbootstrap_v1.2.3_linux_amd64.tar.gz" "override archive URL"
+}
+
+# The default GitHub release base already includes /download; the asset URL must not duplicate it.
+test_default_download_url_uses_single_download_segment() {
+  local fixtures home url_log mock_http
+  fixtures="$(mktemp -d)"
+  home="$(mktemp -d)"
+  url_log="$fixtures/download-urls.log"
+  mock_http="$fixtures/mock-http"
+  make_home "$home"
+  setup_fixtures "$fixtures" "v0.1.0"
+
+  cat > "$mock_http" <<EOF
+#!/bin/bash
+set -euo pipefail
+url="\$1"
+printf '%s\\n' "\$url" >> "$url_log"
+case "\$url" in
+  file://*) cat "\${url#file://}" ;;
+  https://github.com/dnieblesdev/dniebles-bootstrap/releases/download/v0.1.0/*)
+    cat "$fixtures/download/v0.1.0/\${url##*/}"
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "$mock_http"
+
+  local out code archive_url
+  out="$(HOME="$home" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_HTTP_CMD="$mock_http" "$INSTALLER" --version v0.1.0 2>&1)" && code=0 || code=$?
+  if [[ $code -ne 0 ]]; then
+    fail "default download URL install should succeed; output: $out"
+    return
+  fi
+
+  archive_url="$(head -n 2 "$url_log" | tail -n 1)"
+  assert_eq "$archive_url" "https://github.com/dnieblesdev/dniebles-bootstrap/releases/download/v0.1.0/dbootstrap_v0.1.0_linux_amd64.tar.gz" "default archive URL"
+  assert_eq "$(grep -o '/download/' <<< "$archive_url" | wc -l | tr -d ' ')" "1" "download segment count"
 }
 
 # Checksum mismatch aborts before extraction and leaves nothing new.
@@ -476,6 +525,7 @@ main() {
   test_installer_exists
   test_unsupported_platform
   test_supported_install
+  test_default_download_url_uses_single_download_segment
   test_checksum_mismatch
   test_unmanaged_file_refused
   test_force_required_for_managed_reinstall

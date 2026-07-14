@@ -99,7 +99,7 @@ main() {
 
   local archive_name archive_url checksum_url
   archive_name="dbootstrap_${safe_version}_${os}_${arch}.tar.gz"
-  archive_url="${INSTALLER_DOWNLOAD_BASE}/download/${tag}/${archive_name}"
+  archive_url="$(release_asset_url "$INSTALLER_DOWNLOAD_BASE" "$tag" "$archive_name")"
   checksum_url="${archive_url}.sha256"
 
   work_dir="$(mktemp -d)"
@@ -150,6 +150,20 @@ main() {
   echo "Installed dbootstrap ${tag}:"
   echo "  binary:  ${binary_path}"
   echo "  catalog: ${catalog_path}"
+}
+
+# release_asset_url accepts either a GitHub releases/download base or a
+# repository/release root override used by local test fixtures.
+release_asset_url() {
+  local base="${1%/}"
+  local tag="$2"
+  local asset="$3"
+
+  if [[ "$base" == */download ]]; then
+    printf '%s/%s/%s\n' "$base" "$tag" "$asset"
+  else
+    printf '%s/download/%s/%s\n' "$base" "$tag" "$asset"
+  fi
 }
 
 usage() {
