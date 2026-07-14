@@ -19,15 +19,16 @@ const (
 
 // StepResult describes the outcome of executing a single plan step.
 type StepResult struct {
-	Ref             planning.ResourceRef
-	Status          StepStatus
-	Message         string
-	Err             error
-	LinkDetails     []LinkDetail
-	Failure         *LinkFailure
-	Rollback        LinkRollback
-	BaseDiagnostic  *DotfilesBaseDiagnostic
-	DotfilesFailure *DotfilesFailure
+	Ref              planning.ResourceRef
+	Status           StepStatus
+	Message          string
+	Err              error
+	AttentionReasons []string
+	LinkDetails      []LinkDetail
+	Failure          *LinkFailure
+	Rollback         LinkRollback
+	BaseDiagnostic   *DotfilesBaseDiagnostic
+	DotfilesFailure  *DotfilesFailure
 }
 
 type DotfilesPhase string

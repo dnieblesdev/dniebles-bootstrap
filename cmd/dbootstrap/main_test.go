@@ -601,6 +601,7 @@ func TestRunApplyCommand(t *testing.T) {
 				"2. package:jq [not supported yet] noop installer does not perform real installation\n" +
 				"3. package:ripgrep [not supported yet] noop installer does not perform real installation\n" +
 				"4. runtime:go [not supported yet] noop installer does not perform real installation\n" +
+				"   attention: missing required config \"go.env\"\n" +
 				"\n" +
 				"Manual Actions:\n" +
 				homebrewManualActionOutput,
@@ -626,6 +627,7 @@ func TestRunApplyCommand(t *testing.T) {
 				"2. package:jq [not supported yet] noop installer does not perform real installation\n" +
 				"3. package:ripgrep [not supported yet] noop installer does not perform real installation\n" +
 				"4. runtime:go [not supported yet] noop installer does not perform real installation\n" +
+				"   attention: missing required config \"go.env\"\n" +
 				"\n" +
 				"Manual Actions:\n" +
 				homebrewManualActionOutput,
@@ -650,8 +652,11 @@ func TestRunApplyCommand(t *testing.T) {
 				"Steps:\n" +
 				"1. tool:git [unchanged] skipped because Homebrew must be installed manually before brew-backed resources can be applied\n" +
 				"2. package:jq [failed] Homebrew formula presence could not be determined; no mutation attempted\n" +
+				"   attention: Homebrew formula presence could not be determined; no mutation attempted\n" +
 				"3. package:ripgrep [failed] Homebrew formula presence could not be determined; no mutation attempted\n" +
+				"   attention: Homebrew formula presence could not be determined; no mutation attempted\n" +
 				"4. runtime:go [not supported yet] noop installer does not perform real installation\n" +
+				"   attention: missing required config \"go.env\"\n" +
 				"\n" +
 				"Manual Actions:\n" +
 				homebrewManualActionOutput,
@@ -2383,6 +2388,7 @@ version = 1
 [[packages]]
 id = "ripgrep"
 description = "Fast text search"
+config_required = ["ripgrep.env"]
 [packages.install]
 provider = "apt"
 package = "ripgrep"
@@ -2497,7 +2503,7 @@ resources = ["package:ripgrep"]
 			results:    nil,
 			wantCode:   exitSuccess,
 			wantCalls:  nil,
-			wantOutput: "package:ripgrep [planned]",
+			wantOutput: "package:ripgrep [attention_required]",
 		},
 		{
 			name:       "non linux confirmed does not probe dpkg-query",
@@ -2554,6 +2560,16 @@ resources = ["package:ripgrep"]
 			}
 			if !strings.Contains(stdout.String(), tt.wantOutput) {
 				t.Fatalf("stdout = %q, want it to contain %q", stdout.String(), tt.wantOutput)
+			}
+			planningReason := "attention: missing required config \"ripgrep.env\""
+			if !strings.Contains(stdout.String(), planningReason) {
+				t.Fatalf("stdout = %q, want it to contain %q", stdout.String(), planningReason)
+			}
+			if tt.name == "apply linux unknown does not dispatch apt-get" {
+				runtimeReason := "attention: APT package presence could not be determined; no mutation attempted"
+				if planningIndex, runtimeIndex := strings.Index(stdout.String(), planningReason), strings.Index(stdout.String(), runtimeReason); planningIndex < 0 || runtimeIndex < 0 || planningIndex >= runtimeIndex {
+					t.Fatalf("stdout = %q, want planning attention before runtime attention", stdout.String())
+				}
 			}
 			if stderr.String() != "" {
 				t.Fatalf("stderr = %q, want empty", stderr.String())

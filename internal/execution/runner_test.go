@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
@@ -376,5 +377,80 @@ func TestRunnerEmptyPlan(t *testing.T) {
 
 	if len(report.Results) != 0 {
 		t.Fatalf("len(Results) = %d, want 0", len(report.Results))
+	}
+}
+
+func TestRunnerPreservesAttentionReasonsForEveryOutcome(t *testing.T) {
+	delegated := planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "delegated"}
+	installer := &fakeInstaller{kind: planning.ResourceKindTool, results: []StepResult{{
+		Ref: delegated, Status: StepStatusInstalled, Message: "delegated install completed",
+	}}}
+	reasons := []string{"A", "B"}
+	tests := []struct {
+		name        string
+		step        planning.PlanStep
+		wantStatus  StepStatus
+		wantMessage string
+	}{
+		{
+			name:        "delegated installed",
+			step:        planning.PlanStep{Ref: delegated, AttentionReasons: reasons},
+			wantStatus:  StepStatusInstalled,
+			wantMessage: "delegated install completed",
+		},
+		{
+			name: "already installed skipped",
+			step: planning.PlanStep{
+				Ref:      planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "present"},
+				Resource: planning.Resource{Presence: &planning.PresenceMetadata{Kind: "command_exists", Name: "present"}},
+				Status:   planning.PlanStepStatusAlreadyInstalled, AttentionReasons: reasons,
+			},
+			wantStatus: StepStatusSkipped, wantMessage: "already installed; no mutation attempted",
+		},
+		{
+			name: "unknown brew failed",
+			step: planning.PlanStep{
+				Ref:             planning.ResourceRef{Kind: planning.ResourceKindPackage, Name: "unknown"},
+				Resource:        planning.Resource{Install: &planning.InstallMetadata{Provider: "brew", Package: "unknown"}},
+				PackagePresence: planning.PackagePresenceUnknown, AttentionReasons: reasons,
+			},
+			wantStatus: StepStatusFailed, wantMessage: "Homebrew formula presence could not be determined; no mutation attempted",
+		},
+		{
+			name:       "unsupported",
+			step:       planning.PlanStep{Ref: planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "unsupported"}, AttentionReasons: reasons},
+			wantStatus: StepStatusNotImplemented, wantMessage: "no installer registered for kind",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := NewRunner(installer).Run(context.Background(), planning.Plan{Steps: []planning.PlanStep{tt.step}})
+			got := report.Results[0]
+			if got.Status != tt.wantStatus || got.Message != tt.wantMessage {
+				t.Fatalf("result = %#v, want status=%q message=%q", got, tt.wantStatus, tt.wantMessage)
+			}
+			if !reflect.DeepEqual(got.AttentionReasons, reasons) {
+				t.Fatalf("attention reasons = %#v, want %#v", got.AttentionReasons, reasons)
+			}
+		})
+	}
+}
+
+func TestRunnerCopiesAttentionReasonsForEachResult(t *testing.T) {
+	reasons := []string{"missing config", "runtime decoration", "missing config"}
+	steps := []planning.PlanStep{
+		{Ref: planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "first"}, AttentionReasons: reasons},
+		{Ref: planning.ResourceRef{Kind: planning.ResourceKindTool, Name: "second"}, AttentionReasons: reasons},
+	}
+	report := NewRunner(&fakeInstaller{kind: planning.ResourceKindTool}).Run(context.Background(), planning.Plan{Steps: steps})
+
+	report.Results[0].AttentionReasons[0] = "changed"
+	report.Results[0].AttentionReasons = append(report.Results[0].AttentionReasons, "extra")
+	if !reflect.DeepEqual(steps[0].AttentionReasons, reasons) || !reflect.DeepEqual(steps[1].AttentionReasons, reasons) {
+		t.Fatalf("plan reasons mutated: %#v", steps)
+	}
+	if !reflect.DeepEqual(report.Results[1].AttentionReasons, reasons) {
+		t.Fatalf("sibling reasons = %#v, want %#v", report.Results[1].AttentionReasons, reasons)
 	}
 }

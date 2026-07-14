@@ -34,44 +34,40 @@ func NewRunner(installers ...Installer) *Runner {
 func (r *Runner) Run(ctx context.Context, plan planning.Plan) ExecutionReport {
 	report := ExecutionReport{Results: make([]StepResult, 0, len(plan.Steps))}
 	for _, step := range plan.Steps {
+		var result StepResult
 		if isAlreadyInstalledCommandStep(step) || isInstalledBrewFormulaStep(step) || isInstalledAptPackageStep(step) {
-			report.Results = append(report.Results, StepResult{
+			result = StepResult{
 				Ref:     step.Ref,
 				Status:  StepStatusSkipped,
 				Message: "already installed; no mutation attempted",
-			})
-			continue
-		}
-		if isUnknownBrewFormulaStep(step) {
-			report.Results = append(report.Results, StepResult{
+			}
+		} else if isUnknownBrewFormulaStep(step) {
+			result = StepResult{
 				Ref:     step.Ref,
 				Status:  StepStatusFailed,
 				Message: "Homebrew formula presence could not be determined; no mutation attempted",
 				Err:     ErrBrewFormulaPresenceUnknown,
-			})
-			continue
-		}
-		if isUnknownAptPackageStep(step) {
-			report.Results = append(report.Results, StepResult{
+			}
+		} else if isUnknownAptPackageStep(step) {
+			result = StepResult{
 				Ref:     step.Ref,
 				Status:  StepStatusFailed,
 				Message: "APT package presence could not be determined; no mutation attempted",
 				Err:     ErrAptPackagePresenceUnknown,
-			})
-			continue
+			}
+		} else if inst, ok := r.installers[step.Ref.Kind]; !ok {
+			result = StepResult{Ref: step.Ref, Status: StepStatusNotImplemented, Message: "no installer registered for kind"}
+		} else {
+			result = inst.Install(ctx, step)
 		}
-		inst, ok := r.installers[step.Ref.Kind]
-		if !ok {
-			report.Results = append(report.Results, StepResult{
-				Ref:     step.Ref,
-				Status:  StepStatusNotImplemented,
-				Message: "no installer registered for kind",
-			})
-			continue
-		}
-		report.Results = append(report.Results, inst.Install(ctx, step))
+		report.Results = append(report.Results, normalizeResult(step, result))
 	}
 	return report
+}
+
+func normalizeResult(step planning.PlanStep, result StepResult) StepResult {
+	result.AttentionReasons = append([]string(nil), step.AttentionReasons...)
+	return result
 }
 
 func isAlreadyInstalledCommandStep(step planning.PlanStep) bool {

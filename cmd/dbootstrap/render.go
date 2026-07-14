@@ -85,6 +85,9 @@ func renderExecutionReport(w io.Writer, mode applyMode, report execution.Executi
 }
 
 func renderLinkDetails(w io.Writer, result execution.StepResult) {
+	for _, reason := range result.AttentionReasons {
+		fmt.Fprintf(w, "   attention: %s\n", sanitizeTerminalText(reason))
+	}
 	for _, detail := range result.LinkDetails {
 		fmt.Fprintf(w, "   link: %s source=%s target=%s\n", detail.Outcome, sanitizeTerminalText(detail.Source), sanitizeTerminalText(detail.Target))
 		if detail.Cause != nil {

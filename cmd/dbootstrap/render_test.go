@@ -239,6 +239,31 @@ func TestRenderExecutionReportRendersSummaryAndUserFacingStatuses(t *testing.T) 
 	}
 }
 
+func TestRenderLinkDetailsRendersOrderedSanitizedAttentionReasons(t *testing.T) {
+	result := execution.StepResult{
+		AttentionReasons: []string{"planning A", "runtime\x1b[2J", "planning A"},
+		LinkDetails:      []execution.LinkDetail{{Outcome: execution.LinkOutcomeChanged, Source: "source", Target: "target"}},
+		Failure:          &execution.LinkFailure{Module: "module", Cause: execution.LinkCause{Code: "failed", Message: "detail"}},
+	}
+
+	var output bytes.Buffer
+	renderLinkDetails(&output, result)
+	want := "   attention: planning A\n" +
+		"   attention: runtime\\x1b[2J\n" +
+		"   attention: planning A\n" +
+		"   link: changed source=source target=target\n" +
+		"   aggregate failure: module=module cause=failed: detail\n"
+	if got := output.String(); got != want {
+		t.Fatalf("renderLinkDetails() = %q, want %q", got, want)
+	}
+
+	output.Reset()
+	renderLinkDetails(&output, execution.StepResult{})
+	if got := output.String(); got != "" {
+		t.Fatalf("empty reasons output = %q, want empty", got)
+	}
+}
+
 func TestRenderExecutionReportRendersManualActions(t *testing.T) {
 	report := execution.ExecutionReport{
 		Results: []execution.StepResult{
