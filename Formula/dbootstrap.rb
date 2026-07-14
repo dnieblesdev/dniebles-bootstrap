@@ -5,7 +5,7 @@ class Dbootstrap < Formula
   license "MIT"
 
   on_macos do
-    disable! "dbootstrap supports Linux and WSL only; macOS is unsupported"
+    disable! date: "2026-07-14", because: "dbootstrap supports Linux and WSL only; macOS is unsupported"
   end
 
   on_linux do
@@ -23,5 +23,9 @@ class Dbootstrap < Formula
   def install
     bin.install "dbootstrap"
     pkgshare.install "catalog/bootstrap.toml"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/dbootstrap --version")
   end
 end

@@ -51,6 +51,7 @@ jobs:
           brew audit --strict --formula local/pr-candidate/dbootstrap
           brew style local/pr-candidate/dbootstrap
           HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source local/pr-candidate/dbootstrap
+          brew test local/pr-candidate/dbootstrap
           dbootstrap --version
           test -f "$(brew --prefix)/share/dbootstrap/catalog/bootstrap.toml"
           brew uninstall dbootstrap
@@ -105,6 +106,7 @@ jobs:
           brew audit --strict --formula local/pr-candidate/dbootstrap
           brew style local/pr-candidate/dbootstrap
           HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source local/pr-candidate/dbootstrap
+          brew test local/pr-candidate/dbootstrap
           dbootstrap --version
           test -f "$(brew --prefix)/share/dbootstrap/catalog/bootstrap.toml"
           brew uninstall dbootstrap
