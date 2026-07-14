@@ -101,11 +101,7 @@ func (p *LocalDotfilesProvider) RunDotlinkReportWithExecutionContext(ctx context
 	}
 	base := baseContext.Base
 	if baseContext.validatedBase == "" || baseContext.validatedBase != base.CanonicalPath {
-		canonicalBase, err := p.validateResolvedBase(base.CanonicalPath)
-		if err != nil {
-			return DotlinkLinkReport{}, err
-		}
-		base.CanonicalPath = canonicalBase
+		return DotlinkLinkReport{}, ErrUnresolvedDotfiles
 	}
 	if err := p.validateRepo(base.CanonicalPath, modules); err != nil {
 		return DotlinkLinkReport{}, err

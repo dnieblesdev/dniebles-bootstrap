@@ -271,6 +271,44 @@ func TestRenderExecutionReportLabelsValidatedBaseCanonical(t *testing.T) {
 	}
 }
 
+func TestRenderLinkDetailsRendersOnlyDeterministicBaseDiagnosticFacts(t *testing.T) {
+	tests := []struct {
+		name   string
+		result execution.StepResult
+		want   string
+	}{
+		{
+			name: "validated canonical base",
+			result: execution.StepResult{BaseDiagnostic: &execution.DotfilesBaseDiagnostic{
+				Source:        execution.DotfilesBaseSourceHome,
+				CanonicalPath: "/home/ada/.dotfiles",
+				Modules:       []string{"bash"},
+			}},
+			want: "   dotfiles base: canonical base=/home/ada/.dotfiles source=home modules=bash\n",
+		},
+		{
+			name: "rejected attempted candidate",
+			result: execution.StepResult{BaseDiagnostic: &execution.DotfilesBaseDiagnostic{
+				Source:             execution.DotfilesBaseSourceEnv,
+				AttemptedCandidate: "/missing",
+				Modules:            []string{"bash", "nvim"},
+				Cause:              "stat dotfiles base: file does not exist",
+			}},
+			want: "   dotfiles base: source=env attempted candidate=/missing modules=bash, nvim cause=stat dotfiles base: file does not exist\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			renderLinkDetails(&output, tt.result)
+			if got := output.String(); got != tt.want {
+				t.Fatalf("renderLinkDetails() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRenderExecutionReportEscapesTerminalControlsInDotlinkDetails(t *testing.T) {
 	report := execution.ExecutionReport{Results: []execution.StepResult{{
 		Ref:     planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "bash"},

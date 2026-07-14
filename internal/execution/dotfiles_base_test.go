@@ -124,6 +124,34 @@ func TestResolveWithDiagnosticReportsHomeSourceWhenHomeLookupFails(t *testing.T)
 	}
 }
 
+func TestResolveWithDiagnosticRetainsAttemptedIdentityAndFilesystemCause(t *testing.T) {
+	pathErr := &os.PathError{Op: "stat", Path: "/missing", Err: os.ErrNotExist}
+	resolver := fakeDotfilesBaseResolver("/missing", true, "/home/ada")
+	resolver.EvalSymlinks = fakeEval(map[string]string{
+		"/home/ada": "/home/ada",
+		"/missing":  "/missing",
+	})
+	resolver.Stat = func(string) (os.FileInfo, error) { return nil, pathErr }
+
+	base, diagnostic, err := resolver.ResolveWithDiagnostic([]string{"bash", "nvim"})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ResolveWithDiagnostic() error = %v, want wrapped not-exist", err)
+	}
+	var gotPathErr *os.PathError
+	if !errors.As(err, &gotPathErr) || gotPathErr != pathErr {
+		t.Fatalf("ResolveWithDiagnostic() error = %v, want original PathError", err)
+	}
+	if base != (ResolvedDotfilesBase{}) {
+		t.Fatalf("base = %#v, want zero unresolved base", base)
+	}
+	if diagnostic.Source != DotfilesBaseSourceEnv || diagnostic.AttemptedCandidate != "/missing" || diagnostic.CanonicalPath != "" {
+		t.Fatalf("diagnostic = %#v, want attempted env candidate only", diagnostic)
+	}
+	if got, want := diagnostic.Modules, []string{"bash", "nvim"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("diagnostic modules = %#v, want %#v", got, want)
+	}
+}
+
 func fakeDotfilesBaseResolver(envValue string, envSet bool, home string) DotfilesBaseResolver {
 	return DotfilesBaseResolver{
 		LookupEnv: func(string) (string, bool) { return envValue, envSet },
