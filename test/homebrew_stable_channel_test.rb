@@ -31,6 +31,7 @@ abort("formula must not use imperative CPU detection") if source.include?("Hardw
 abort("formula must not include placeholders") if source.match?(/latest|prerelease|TODO|<[^>]+>/i)
 
 assert_before(source, "url \"#{RELEASE_BASE}/dbootstrap_v0.1.0_linux_amd64.tar.gz\"", "on_macos do")
+assert_before(source, "sha256 \"a8f21a55019ff09c08a124f30bffc6831c960be81cbd1496e43b26c92784d109\"", "license \"MIT\"")
 assert_before(source, "on_macos do", "on_linux do")
 assert_before(source, "disable!", "on_linux do")
 assert_before(source, "on_linux do", "on_arm do")
