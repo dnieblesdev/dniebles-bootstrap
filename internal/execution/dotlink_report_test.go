@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -48,6 +49,14 @@ func TestParseDotlinkLinkReport(t *testing.T) {
 				t.Fatalf("report = %#v, want validated report entries", report)
 			}
 		})
+	}
+}
+
+func TestParseDotlinkLinkReportPreservesConcreteSyntaxError(t *testing.T) {
+	_, err := ParseDotlinkLinkReport([]byte(`{"schema_version":]}`), []string{"bash"})
+	var syntax *json.SyntaxError
+	if !errors.Is(err, ErrInvalidDotlinkReport) || !errors.As(err, &syntax) {
+		t.Fatalf("error = %v, want invalid-report sentinel and syntax cause", err)
 	}
 }
 

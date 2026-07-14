@@ -98,19 +98,53 @@ func renderLinkDetails(w io.Writer, result execution.StepResult) {
 			fmt.Fprintf(w, "   rollback removed: %s\n", sanitizeTerminalText(removed))
 		}
 	}
-	if result.BaseDiagnostic != nil {
-		diagnostic := result.BaseDiagnostic
-		modules := sanitizeTerminalText(strings.Join(diagnostic.Modules, ", "))
-		if diagnostic.CanonicalPath != "" {
-			fmt.Fprintf(w, "   dotfiles base: canonical base=%s source=%s modules=%s\n", sanitizeTerminalText(diagnostic.CanonicalPath), sanitizeTerminalText(string(diagnostic.Source)), modules)
-			return
+	if failure := result.DotfilesFailure; failure != nil {
+		if result.BaseDiagnostic != nil && failure.BaseSnapshot != nil && !sameBaseDiagnostic(*result.BaseDiagnostic, failure.BaseSnapshot) {
+			renderBaseDiagnostic(w, "report base context", result.BaseDiagnostic)
+			renderBaseDiagnostic(w, "failure base context", failure.BaseSnapshot)
+		} else if result.BaseDiagnostic != nil {
+			renderBaseDiagnostic(w, "dotfiles base", result.BaseDiagnostic)
+		} else if failure.BaseSnapshot != nil {
+			renderBaseDiagnostic(w, "failure base context", failure.BaseSnapshot)
 		}
-		fmt.Fprintf(w, "   dotfiles base: source=%s attempted candidate=%s modules=%s", sanitizeTerminalText(string(diagnostic.Source)), sanitizeTerminalText(diagnostic.AttemptedCandidate), modules)
-		if diagnostic.Cause != "" {
-			fmt.Fprintf(w, " cause=%s", sanitizeTerminalText(diagnostic.Cause))
+		fmt.Fprintf(w, "   executable: %s\n   runner: %s\n   command: %s\n", sanitizeTerminalText(failure.Executable), sanitizeTerminalText(failure.Runner), sanitizeTerminalText(strings.Join(failure.Command.Args, " ")))
+		if failure.ExitCode != nil {
+			fmt.Fprintf(w, "   exit code: %d\n", *failure.ExitCode)
 		}
-		fmt.Fprintln(w)
+		if failure.Stderr != "" {
+			fmt.Fprintf(w, "   stderr: %s\n", sanitizeTerminalText(failure.Stderr))
+		}
+	} else if result.BaseDiagnostic != nil {
+		renderBaseDiagnostic(w, "dotfiles base", result.BaseDiagnostic)
 	}
+}
+
+func renderBaseDiagnostic(w io.Writer, label string, diagnostic *execution.DotfilesBaseDiagnostic) {
+	if diagnostic == nil {
+		return
+	}
+	modules := sanitizeTerminalText(strings.Join(diagnostic.Modules, ", "))
+	if diagnostic.CanonicalPath != "" {
+		fmt.Fprintf(w, "   %s: canonical base=%s source=%s modules=%s\n", label, sanitizeTerminalText(diagnostic.CanonicalPath), sanitizeTerminalText(string(diagnostic.Source)), modules)
+		return
+	}
+	fmt.Fprintf(w, "   %s: source=%s attempted candidate=%s modules=%s", label, sanitizeTerminalText(string(diagnostic.Source)), sanitizeTerminalText(diagnostic.AttemptedCandidate), modules)
+	if diagnostic.Cause != "" {
+		fmt.Fprintf(w, " cause=%s", sanitizeTerminalText(diagnostic.Cause))
+	}
+	fmt.Fprintln(w)
+}
+
+func sameBaseDiagnostic(primary execution.DotfilesBaseDiagnostic, snapshot *execution.DotfilesBaseDiagnostic) bool {
+	if snapshot == nil || primary.Source != snapshot.Source || primary.AttemptedCandidate != snapshot.AttemptedCandidate || primary.CanonicalPath != snapshot.CanonicalPath || len(primary.Modules) != len(snapshot.Modules) {
+		return false
+	}
+	for i := range primary.Modules {
+		if primary.Modules[i] != snapshot.Modules[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func sanitizeTerminalText(value string) string {

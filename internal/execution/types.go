@@ -1,6 +1,10 @@
 package execution
 
-import "github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
+import (
+	"fmt"
+
+	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
+)
 
 // StepStatus is a runtime execution outcome. It is intentionally separate from
 // planning.PlanStepStatus to avoid semantic drift between intended and executed work.
@@ -15,14 +19,42 @@ const (
 
 // StepResult describes the outcome of executing a single plan step.
 type StepResult struct {
-	Ref            planning.ResourceRef
-	Status         StepStatus
-	Message        string
-	Err            error
-	LinkDetails    []LinkDetail
-	Failure        *LinkFailure
-	Rollback       LinkRollback
-	BaseDiagnostic *DotfilesBaseDiagnostic
+	Ref             planning.ResourceRef
+	Status          StepStatus
+	Message         string
+	Err             error
+	LinkDetails     []LinkDetail
+	Failure         *LinkFailure
+	Rollback        LinkRollback
+	BaseDiagnostic  *DotfilesBaseDiagnostic
+	DotfilesFailure *DotfilesFailure
+}
+
+// DotfilesFailure retains safe execution and report-validation facts.
+type DotfilesFailure struct {
+	Executable, Runner string
+	Command            CommandRequest
+	ExitCode           *int
+	Stderr             string
+	ReportStatus       DotlinkReportStatus
+	BaseSnapshot       *DotfilesBaseDiagnostic
+	ExecutionErr       error
+	ParseErr           error
+}
+
+func (f *DotfilesFailure) Error() string {
+	return fmt.Sprintf("dotlink execution failed (runner=%s status=%s)", f.Runner, f.ReportStatus)
+}
+
+func (f *DotfilesFailure) Unwrap() []error {
+	errs := make([]error, 0, 2)
+	if f.ExecutionErr != nil {
+		errs = append(errs, f.ExecutionErr)
+	}
+	if f.ParseErr != nil {
+		errs = append(errs, f.ParseErr)
+	}
+	return errs
 }
 
 // LinkOutcome is the execution-owned outcome for one validated dotlink entry.

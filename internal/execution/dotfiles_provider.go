@@ -106,10 +106,6 @@ func (p *LocalDotfilesProvider) RunDotlinkReportWithExecutionContext(ctx context
 	if err := p.validateRepo(base.CanonicalPath, modules); err != nil {
 		return DotlinkLinkReport{}, err
 	}
-	if p.Runner == nil {
-		return DotlinkLinkReport{}, ErrMissingDotlinkRunner
-	}
-
 	timeout := p.Timeout
 	if timeout <= 0 {
 		timeout = DefaultDotlinkTimeout
@@ -117,32 +113,83 @@ func (p *LocalDotfilesProvider) RunDotlinkReportWithExecutionContext(ctx context
 	args := make([]string, 0, len(modules)+2)
 	args = append(args, "link", "--report=json")
 	args = append(args, modules...)
-	result := p.Runner.RunCommand(ctx, CommandRequest{
+	request := CommandRequest{
 		Executable: filepath.Join(base.CanonicalPath, "bin", "dotlink"),
 		Args:       args,
 		Dir:        base.CanonicalPath,
 		Timeout:    timeout,
-	})
-
+	}
+	if p.Runner == nil {
+		return DotlinkLinkReport{}, &DotfilesFailure{Executable: request.Executable, Runner: "CommandRunner", Command: request, ReportStatus: "unavailable", BaseSnapshot: &baseContext.Diagnostic, ExecutionErr: errors.Join(ErrDotlinkCommandFailed, ErrMissingDotlinkRunner)}
+	}
+	result := p.Runner.RunCommand(ctx, request)
+	failure := dotfilesCommandFailure(baseContext.Diagnostic, request, result)
 	if strings.TrimSpace(result.Stdout) == "" {
-		if result.Status == CommandStatusSucceeded {
-			return DotlinkLinkReport{}, ErrDotlinkReportUnavailable
-		}
-		return DotlinkLinkReport{}, ErrDotlinkCommandFailed
+		failure.ParseErr = errors.Join(ErrInvalidDotlinkReport, ErrDotlinkReportUnavailable)
+		return DotlinkLinkReport{}, failure
 	}
 	report, parseErr := ParseDotlinkLinkReport([]byte(result.Stdout), modules)
 	if parseErr != nil {
-		if result.Status == CommandStatusSucceeded {
-			return DotlinkLinkReport{}, parseErr
-		}
-		return DotlinkLinkReport{}, ErrDotlinkCommandFailed
+		failure.ParseErr = errors.Join(ErrInvalidDotlinkReport, parseErr)
+		return DotlinkLinkReport{}, failure
 	}
 	report.CommandStatus = result.Status
 	if (report.Status == DotlinkReportStatusSuccess && result.Status != CommandStatusSucceeded) ||
 		(report.Status == DotlinkReportStatusFailed && result.Status != CommandStatusFailed) {
-		return DotlinkLinkReport{}, ErrInconsistentDotlinkReport
+		failure.ParseErr = errors.Join(ErrInvalidDotlinkReport, ErrInconsistentDotlinkReport)
+		return DotlinkLinkReport{}, failure
+	}
+	if failure.ExecutionErr != nil {
+		failure.ReportStatus = report.Status
+		return report, failure
 	}
 	return report, nil
+}
+
+func dotfilesCommandFailure(base DotfilesBaseDiagnostic, request CommandRequest, result CommandResult) *DotfilesFailure {
+	failure := &DotfilesFailure{Executable: request.Executable, Runner: "CommandRunner", Command: request, Stderr: sanitizeDotlinkStderr(result.Stderr), ReportStatus: "unavailable", BaseSnapshot: &base}
+	if result.Status != CommandStatusSucceeded {
+		cause := result.Err
+		if cause == nil {
+			cause = fmt.Errorf("command status %s", result.Status)
+		}
+		failure.ExecutionErr = errors.Join(ErrDotlinkCommandFailed, cause)
+		if result.ExitCode != 0 {
+			code := result.ExitCode
+			failure.ExitCode = &code
+		}
+	}
+	return failure
+}
+
+const (
+	maxDotlinkStderrBytes  = 4096
+	dotlinkStderrTruncated = "...[truncated]"
+)
+
+func sanitizeDotlinkStderr(stderr string) string {
+	tokens := make([]string, 0, len(stderr))
+	total := 0
+	for _, r := range stderr {
+		token := string(r)
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			token = fmt.Sprintf(`\x%02x`, r)
+		}
+		tokens = append(tokens, token)
+		total += len(token)
+	}
+	if total <= maxDotlinkStderrBytes {
+		return strings.Join(tokens, "")
+	}
+	var out strings.Builder
+	for _, token := range tokens {
+		if out.Len()+len(token)+len(dotlinkStderrTruncated) > maxDotlinkStderrBytes {
+			break
+		}
+		out.WriteString(token)
+	}
+	out.WriteString(dotlinkStderrTruncated)
+	return out.String()
 }
 
 func (p *LocalDotfilesProvider) resolvedBase() (ResolvedDotfilesBase, error) {

@@ -192,6 +192,17 @@ func TestDotfilesInstallerProviderErrorHasNoInferredLinks(t *testing.T) {
 	}
 }
 
+func TestDotfilesInstallerPreservesFailedReportAndExecutionError(t *testing.T) {
+	runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusFailed, ExitCode: 2, Err: errors.New("exit 2"), Stdout: string(readDotlinkReportFixture(t, "failed.json"))}}
+	result := NewDotfilesInstaller(newFakeLocalProvider("/repo", runner)).Install(context.Background(), planning.PlanStep{Ref: planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "bash"}})
+	if result.Status != StepStatusFailed || len(result.LinkDetails) == 0 || !errors.Is(result.Err, ErrDotlinkCommandFailed) || result.DotfilesFailure == nil {
+		t.Fatalf("result = %#v, want failed step with retained report and execution failure", result)
+	}
+	if strings.Contains(result.Message, "dotfiles base") || result.BaseDiagnostic == nil || result.BaseDiagnostic.CanonicalPath != "/repo" {
+		t.Fatalf("result = %#v, want base-free message and unchanged primary base diagnostic", result)
+	}
+}
+
 func TestDotfilesInstallerResolvesBaseOnceForDiagnosticMessageAndExecution(t *testing.T) {
 	homeCalls := 0
 	runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusSucceeded, Stdout: string(readDotlinkReportFixture(t, "all-changed.json"))}}

@@ -2,9 +2,12 @@ package execution
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -28,15 +31,74 @@ func TestLocalDotfilesProviderBuildsExactCommand(t *testing.T) {
 	}
 }
 
+func TestDotfilesFailurePreservesIndependentCausesAndBoundedStderr(t *testing.T) {
+	exit := &exec.ExitError{}
+	syntax := &json.SyntaxError{}
+	failure := &DotfilesFailure{ExecutionErr: errors.Join(ErrDotlinkCommandFailed, exit), ParseErr: errors.Join(ErrInvalidDotlinkReport, syntax), Stderr: sanitizeDotlinkStderr(strings.Repeat("é\x1b", 5000))}
+	if !errors.Is(failure, ErrDotlinkCommandFailed) || !errors.Is(failure, ErrInvalidDotlinkReport) {
+		t.Fatalf("failure did not preserve sentinel identities: %v", failure)
+	}
+	var gotExit *exec.ExitError
+	var gotSyntax *json.SyntaxError
+	if !errors.As(failure, &gotExit) || !errors.As(failure, &gotSyntax) || len(failure.Stderr) > 4096 || !strings.HasSuffix(failure.Stderr, dotlinkStderrTruncated) || strings.Contains(failure.Stderr, "\x1b") {
+		t.Fatalf("failure = %#v, want joined typed causes and bounded escaped stderr", failure)
+	}
+}
+
+func TestLocalDotfilesProviderComposesExecutionAndReportOutcomes(t *testing.T) {
+	exit := &exec.ExitError{}
+	runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusFailed, Err: exit, ExitCode: 7, Stdout: "{", Stderr: "bad\x1b[31m"}}
+	report, err := newFakeLocalProvider("/repo", runner).RunDotlinkReport(context.Background(), []string{"bash"})
+	if report.Status != "" || !errors.Is(err, ErrDotlinkCommandFailed) || !errors.Is(err, ErrInvalidDotlinkReport) {
+		t.Fatalf("report=%#v err=%v, want discarded invalid report and both causes", report, err)
+	}
+	var got *DotfilesFailure
+	if !errors.As(err, &got) || got.ExitCode == nil || *got.ExitCode != 7 || got.Executable != "/repo/bin/dotlink" {
+		t.Fatalf("failure = %#v, want structured canonical execution context", got)
+	}
+}
+
+func TestLocalDotfilesProviderFailedCommandMalformedReportPreservesAllCauses(t *testing.T) {
+	exit := &exec.ExitError{}
+	runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusFailed, Err: exit, Stdout: `{"schema_version":]}`}}
+	provider := newFakeLocalProvider("/repo", runner)
+	_, err := provider.RunDotlinkReportWithExecutionContext(context.Background(), []string{"bash"}, provider.ResolveDotfilesExecutionContext([]string{"bash"}))
+	var gotExit *exec.ExitError
+	var gotSyntax *json.SyntaxError
+	if !errors.Is(err, ErrDotlinkCommandFailed) || !errors.Is(err, ErrInvalidDotlinkReport) || !errors.As(err, &gotExit) || !errors.As(err, &gotSyntax) {
+		t.Fatalf("provider error = %v, want both sentinels and concrete causes", err)
+	}
+}
+
+func TestLocalDotfilesProviderMissingRunnerRetainsCanonicalCommandContext(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	provider := newFakeLocalProvider("/repo", runner)
+	provider.Runner = nil
+	_, err := provider.RunDotlinkReportWithExecutionContext(context.Background(), []string{"bash"}, provider.ResolveDotfilesExecutionContext([]string{"bash"}))
+	var failure *DotfilesFailure
+	if !errors.As(err, &failure) || failure.Runner != "CommandRunner" || failure.Executable != "/repo/bin/dotlink" {
+		t.Fatalf("failure = %#v, want runner and canonical executable", failure)
+	}
+	want := CommandRequest{Executable: "/repo/bin/dotlink", Args: []string{"link", "--report=json", "bash"}, Dir: "/repo", Timeout: DefaultDotlinkTimeout}
+	if !reflect.DeepEqual(failure.Command, want) || !errors.Is(err, ErrMissingDotlinkRunner) {
+		t.Fatalf("failure = %#v, want command request and missing-runner cause", failure)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %d, want 0", len(runner.calls))
+	}
+}
+
 func TestLocalDotfilesProviderReconcilesCommandAndReport(t *testing.T) {
+	exit := &exec.ExitError{}
 	tests := []struct {
 		name     string
 		result   CommandResult
 		wantErr  error
+		wantExit *exec.ExitError
 		wantSeen bool
 	}{
 		{name: "success report on success", result: CommandResult{Status: CommandStatusSucceeded, Stdout: string(readDotlinkReportFixture(t, "all-changed.json"))}, wantSeen: true},
-		{name: "failed report on failed command", result: CommandResult{Status: CommandStatusFailed, Stdout: string(readDotlinkReportFixture(t, "failed.json")), Stderr: "human output must be ignored"}, wantSeen: true},
+		{name: "failed report on failed command", result: CommandResult{Status: CommandStatusFailed, Err: exit, Stdout: string(readDotlinkReportFixture(t, "failed.json")), Stderr: "human output must be ignored"}, wantErr: ErrDotlinkCommandFailed, wantExit: exit, wantSeen: true},
 		{name: "failed report on timed out command", result: CommandResult{Status: CommandStatusTimedOut, Stdout: string(readDotlinkReportFixture(t, "failed.json"))}, wantErr: ErrInconsistentDotlinkReport},
 		{name: "failed report on command not run", result: CommandResult{Status: CommandStatusNotRun, Stdout: string(readDotlinkReportFixture(t, "failed.json"))}, wantErr: ErrInconsistentDotlinkReport},
 		{name: "missing report on failed command", result: CommandResult{Status: CommandStatusFailed, Stderr: string(readDotlinkReportFixture(t, "failed.json"))}, wantErr: ErrDotlinkCommandFailed},
@@ -48,11 +110,15 @@ func TestLocalDotfilesProviderReconcilesCommandAndReport(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			runner := &fakeCommandRunner{result: tt.result}
 			provider := newFakeLocalProvider("/repo", runner)
-			report, err := provider.RunDotlinkReport(context.Background(), []string{"bash"})
+			report, err := provider.RunDotlinkReportWithExecutionContext(context.Background(), []string{"bash"}, provider.ResolveDotfilesExecutionContext([]string{"bash"}))
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("RunDotlinkReport() error = %v, want %v", err, tt.wantErr)
 			}
-			if tt.wantSeen && (err != nil || report.Status == "" || len(report.Entries) == 0) {
+			var gotExit *exec.ExitError
+			if tt.wantExit != nil && (!errors.Is(err, ErrDotlinkCommandFailed) || !errors.As(err, &gotExit) || gotExit != tt.wantExit) {
+				t.Fatalf("RunDotlinkReportWithExecutionContext() error = %v, want ErrDotlinkCommandFailed and exit error %p", err, tt.wantExit)
+			}
+			if tt.wantSeen && (report.Status == "" || len(report.Entries) == 0) {
 				t.Fatalf("report = %#v, error = %v, want retained validated report", report, err)
 			}
 			if !tt.wantSeen && err != nil && (report.Status != "" || len(report.Entries) != 0) {
