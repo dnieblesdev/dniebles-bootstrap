@@ -91,20 +91,21 @@ func TestLocalDotfilesProviderMissingRunnerRetainsCanonicalCommandContext(t *tes
 func TestLocalDotfilesProviderReconcilesCommandAndReport(t *testing.T) {
 	exit := &exec.ExitError{}
 	tests := []struct {
-		name     string
-		result   CommandResult
-		wantErr  error
-		wantExit *exec.ExitError
-		wantSeen bool
+		name      string
+		result    CommandResult
+		wantErr   error
+		wantExit  *exec.ExitError
+		wantSeen  bool
+		wantPhase DotfilesPhase
 	}{
 		{name: "success report on success", result: CommandResult{Status: CommandStatusSucceeded, Stdout: string(readDotlinkReportFixture(t, "all-changed.json"))}, wantSeen: true},
-		{name: "failed report on failed command", result: CommandResult{Status: CommandStatusFailed, Err: exit, Stdout: string(readDotlinkReportFixture(t, "failed.json")), Stderr: "human output must be ignored"}, wantErr: ErrDotlinkCommandFailed, wantExit: exit, wantSeen: true},
-		{name: "failed report on timed out command", result: CommandResult{Status: CommandStatusTimedOut, Stdout: string(readDotlinkReportFixture(t, "failed.json"))}, wantErr: ErrInconsistentDotlinkReport},
-		{name: "failed report on command not run", result: CommandResult{Status: CommandStatusNotRun, Stdout: string(readDotlinkReportFixture(t, "failed.json"))}, wantErr: ErrInconsistentDotlinkReport},
-		{name: "missing report on failed command", result: CommandResult{Status: CommandStatusFailed, Stderr: string(readDotlinkReportFixture(t, "failed.json"))}, wantErr: ErrDotlinkCommandFailed},
-		{name: "invalid report on failed command", result: CommandResult{Status: CommandStatusFailed, Stdout: "not JSON"}, wantErr: ErrDotlinkCommandFailed},
-		{name: "success report on failed command", result: CommandResult{Status: CommandStatusFailed, Stdout: string(readDotlinkReportFixture(t, "status-exit-mismatch.json"))}, wantErr: ErrInconsistentDotlinkReport},
-		{name: "failed report on success command", result: CommandResult{Status: CommandStatusSucceeded, Stdout: string(readDotlinkReportFixture(t, "failed.json"))}, wantErr: ErrInconsistentDotlinkReport},
+		{name: "failed report on failed command", result: CommandResult{Status: CommandStatusFailed, Err: exit, Stdout: string(readDotlinkReportFixture(t, "failed.json")), Stderr: "human output must be ignored"}, wantErr: ErrDotlinkCommandFailed, wantExit: exit, wantSeen: true, wantPhase: DotfilesPhaseCommandExecution},
+		{name: "failed report on timed out command", result: CommandResult{Status: CommandStatusTimedOut, Stdout: string(readDotlinkReportFixture(t, "failed.json"))}, wantErr: ErrInconsistentDotlinkReport, wantPhase: DotfilesPhaseReportValidation},
+		{name: "failed report on command not run", result: CommandResult{Status: CommandStatusNotRun, Stdout: string(readDotlinkReportFixture(t, "failed.json"))}, wantErr: ErrInconsistentDotlinkReport, wantPhase: DotfilesPhaseReportValidation},
+		{name: "missing report on failed command", result: CommandResult{Status: CommandStatusFailed, Stderr: string(readDotlinkReportFixture(t, "failed.json"))}, wantErr: ErrDotlinkCommandFailed, wantPhase: DotfilesPhaseReportValidation},
+		{name: "invalid report on failed command", result: CommandResult{Status: CommandStatusFailed, Stdout: "not JSON"}, wantErr: ErrDotlinkCommandFailed, wantPhase: DotfilesPhaseReportValidation},
+		{name: "success report on failed command", result: CommandResult{Status: CommandStatusFailed, Stdout: string(readDotlinkReportFixture(t, "status-exit-mismatch.json"))}, wantErr: ErrInconsistentDotlinkReport, wantPhase: DotfilesPhaseReportValidation},
+		{name: "failed report on success command", result: CommandResult{Status: CommandStatusSucceeded, Stdout: string(readDotlinkReportFixture(t, "failed.json"))}, wantErr: ErrInconsistentDotlinkReport, wantPhase: DotfilesPhaseReportValidation},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -113,6 +114,12 @@ func TestLocalDotfilesProviderReconcilesCommandAndReport(t *testing.T) {
 			report, err := provider.RunDotlinkReportWithExecutionContext(context.Background(), []string{"bash"}, provider.ResolveDotfilesExecutionContext([]string{"bash"}))
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("RunDotlinkReport() error = %v, want %v", err, tt.wantErr)
+			}
+			if tt.wantPhase != "" {
+				var failure *DotfilesFailure
+				if !errors.As(err, &failure) || failure.Phase != tt.wantPhase {
+					t.Fatalf("failure = %#v, want phase %q", failure, tt.wantPhase)
+				}
 			}
 			var gotExit *exec.ExitError
 			if tt.wantExit != nil && (!errors.Is(err, ErrDotlinkCommandFailed) || !errors.As(err, &gotExit) || gotExit != tt.wantExit) {
@@ -214,6 +221,42 @@ func TestLocalDotfilesProviderValidationFailuresDoNotRun(t *testing.T) {
 
 			if err := provider.RunDotlink(context.Background(), tt.modules); err == nil {
 				t.Fatal("RunDotlink() error = nil, want failure")
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runner calls = %d, want 0", len(runner.calls))
+			}
+		})
+	}
+}
+
+func TestLocalDotfilesProviderPrerequisiteFailuresRetainAttemptedCandidates(t *testing.T) {
+	tests := []struct {
+		name       string
+		modules    []string
+		setup      func(*LocalDotfilesProvider)
+		wantKind   DotfilesPrerequisiteTargetKind
+		wantTarget string
+		wantErr    error
+	}{
+		{name: "missing runner", modules: []string{"bash"}, setup: func(p *LocalDotfilesProvider) { p.Stat = statDirs("/repo", "/repo/bash") }, wantKind: DotfilesPrerequisiteRunner, wantTarget: "/repo/bin/dotlink", wantErr: os.ErrNotExist},
+		{name: "missing module", modules: []string{"missing"}, wantKind: DotfilesPrerequisiteModule, wantTarget: "/repo/missing", wantErr: os.ErrNotExist},
+		{name: "escaping module", modules: []string{"bash"}, setup: func(p *LocalDotfilesProvider) {
+			p.EvalSymlinks = fakeEval(map[string]string{"/home/ada": "/home/ada", "/repo": "/repo", "/repo/bin/dotlink": "/repo/bin/dotlink", "/repo/bash": "/tmp/bash"})
+		}, wantKind: DotfilesPrerequisiteModule, wantTarget: "/repo/bash", wantErr: ErrDotfilesPathEscapes},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeCommandRunner{}
+			provider := newFakeLocalProvider("/repo", runner)
+			if tt.setup != nil {
+				tt.setup(provider)
+			}
+
+			_, err := provider.RunDotlinkReport(context.Background(), tt.modules)
+			var failure *DotfilesFailure
+			if !errors.As(err, &failure) || failure.Phase != DotfilesPhasePrerequisite || failure.PrerequisiteTarget == nil || failure.PrerequisiteTarget.Kind != tt.wantKind || failure.PrerequisiteTarget.AttemptedCandidate != tt.wantTarget || !errors.Is(err, tt.wantErr) {
+				t.Fatalf("failure = %#v, error = %v; want prerequisite candidate %q and %v", failure, err, tt.wantTarget, tt.wantErr)
 			}
 			if len(runner.calls) != 0 {
 				t.Fatalf("runner calls = %d, want 0", len(runner.calls))

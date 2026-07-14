@@ -97,14 +97,15 @@ func (p *LocalDotfilesProvider) RunDotlinkReport(ctx context.Context, modules []
 
 func (p *LocalDotfilesProvider) RunDotlinkReportWithExecutionContext(ctx context.Context, modules []string, baseContext DotfilesExecutionContext) (DotlinkLinkReport, error) {
 	if baseContext.Err != nil {
-		return DotlinkLinkReport{}, baseContext.Err
+		return DotlinkLinkReport{}, &DotfilesFailure{Phase: DotfilesPhaseResolution, BaseSnapshot: &baseContext.Diagnostic, PrerequisiteErr: baseContext.Err}
 	}
 	base := baseContext.Base
 	if baseContext.validatedBase == "" || baseContext.validatedBase != base.CanonicalPath {
 		return DotlinkLinkReport{}, ErrUnresolvedDotfiles
 	}
-	if err := p.validateRepo(base.CanonicalPath, modules); err != nil {
-		return DotlinkLinkReport{}, err
+	runnerCandidate := filepath.Join(base.CanonicalPath, "bin", "dotlink")
+	if failure := p.validatePrerequisites(base.CanonicalPath, modules, baseContext.Diagnostic, runnerCandidate); failure != nil {
+		return DotlinkLinkReport{}, failure
 	}
 	timeout := p.Timeout
 	if timeout <= 0 {
@@ -114,28 +115,31 @@ func (p *LocalDotfilesProvider) RunDotlinkReportWithExecutionContext(ctx context
 	args = append(args, "link", "--report=json")
 	args = append(args, modules...)
 	request := CommandRequest{
-		Executable: filepath.Join(base.CanonicalPath, "bin", "dotlink"),
+		Executable: runnerCandidate,
 		Args:       args,
 		Dir:        base.CanonicalPath,
 		Timeout:    timeout,
 	}
 	if p.Runner == nil {
-		return DotlinkLinkReport{}, &DotfilesFailure{Executable: request.Executable, Runner: "CommandRunner", Command: request, ReportStatus: "unavailable", BaseSnapshot: &baseContext.Diagnostic, ExecutionErr: errors.Join(ErrDotlinkCommandFailed, ErrMissingDotlinkRunner)}
+		return DotlinkLinkReport{}, &DotfilesFailure{Phase: DotfilesPhaseCommandExecution, Executable: request.Executable, Runner: "CommandRunner", Command: request, ReportStatus: "unavailable", BaseSnapshot: &baseContext.Diagnostic, ExecutionErr: errors.Join(ErrDotlinkCommandFailed, ErrMissingDotlinkRunner)}
 	}
 	result := p.Runner.RunCommand(ctx, request)
 	failure := dotfilesCommandFailure(baseContext.Diagnostic, request, result)
 	if strings.TrimSpace(result.Stdout) == "" {
+		failure.Phase = DotfilesPhaseReportValidation
 		failure.ParseErr = errors.Join(ErrInvalidDotlinkReport, ErrDotlinkReportUnavailable)
 		return DotlinkLinkReport{}, failure
 	}
 	report, parseErr := ParseDotlinkLinkReport([]byte(result.Stdout), modules)
 	if parseErr != nil {
+		failure.Phase = DotfilesPhaseReportValidation
 		failure.ParseErr = errors.Join(ErrInvalidDotlinkReport, parseErr)
 		return DotlinkLinkReport{}, failure
 	}
 	report.CommandStatus = result.Status
 	if (report.Status == DotlinkReportStatusSuccess && result.Status != CommandStatusSucceeded) ||
 		(report.Status == DotlinkReportStatusFailed && result.Status != CommandStatusFailed) {
+		failure.Phase = DotfilesPhaseReportValidation
 		failure.ParseErr = errors.Join(ErrInvalidDotlinkReport, ErrInconsistentDotlinkReport)
 		return DotlinkLinkReport{}, failure
 	}
@@ -147,7 +151,7 @@ func (p *LocalDotfilesProvider) RunDotlinkReportWithExecutionContext(ctx context
 }
 
 func dotfilesCommandFailure(base DotfilesBaseDiagnostic, request CommandRequest, result CommandResult) *DotfilesFailure {
-	failure := &DotfilesFailure{Executable: request.Executable, Runner: "CommandRunner", Command: request, Stderr: sanitizeDotlinkStderr(result.Stderr), ReportStatus: "unavailable", BaseSnapshot: &base}
+	failure := &DotfilesFailure{Phase: DotfilesPhaseCommandExecution, Executable: request.Executable, Runner: "CommandRunner", Command: request, Stderr: sanitizeDotlinkStderr(result.Stderr), ReportStatus: "unavailable", BaseSnapshot: &base}
 	if result.Status != CommandStatusSucceeded {
 		cause := result.Err
 		if cause == nil {
@@ -160,6 +164,34 @@ func dotfilesCommandFailure(base DotfilesBaseDiagnostic, request CommandRequest,
 		}
 	}
 	return failure
+}
+
+func (p *LocalDotfilesProvider) validatePrerequisites(base string, modules []string, diagnostic DotfilesBaseDiagnostic, runnerCandidate string) *DotfilesFailure {
+	if err := p.validateContainedExistingPath(base, runnerCandidate, false); err != nil {
+		return prerequisiteFailure(diagnostic, DotfilesPrerequisiteRunner, runnerCandidate, fmt.Errorf("validate dotlink: %w", err))
+	}
+	if len(modules) == 0 {
+		return prerequisiteFailure(diagnostic, DotfilesPrerequisiteModule, "", ErrEmptyDotfileModules)
+	}
+	for _, module := range modules {
+		candidate := filepath.Join(base, module)
+		if err := validateDotfileModuleName(module); err != nil {
+			return prerequisiteFailure(diagnostic, DotfilesPrerequisiteModule, candidate, err)
+		}
+		if err := p.validateContainedExistingPath(base, candidate, true); err != nil {
+			return prerequisiteFailure(diagnostic, DotfilesPrerequisiteModule, candidate, fmt.Errorf("validate module %q: %w", module, err))
+		}
+	}
+	return nil
+}
+
+func prerequisiteFailure(base DotfilesBaseDiagnostic, kind DotfilesPrerequisiteTargetKind, candidate string, cause error) *DotfilesFailure {
+	return &DotfilesFailure{
+		Phase:              DotfilesPhasePrerequisite,
+		BaseSnapshot:       &base,
+		PrerequisiteTarget: &DotfilesPrerequisiteTarget{Kind: kind, AttemptedCandidate: candidate},
+		PrerequisiteErr:    cause,
+	}
 }
 
 const (

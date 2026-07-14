@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"strings"
 
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/execution"
@@ -107,7 +109,18 @@ func renderLinkDetails(w io.Writer, result execution.StepResult) {
 		} else if failure.BaseSnapshot != nil {
 			renderBaseDiagnostic(w, "failure base context", failure.BaseSnapshot)
 		}
-		fmt.Fprintf(w, "   executable: %s\n   runner: %s\n   command: %s\n", sanitizeTerminalText(failure.Executable), sanitizeTerminalText(failure.Runner), sanitizeTerminalText(strings.Join(failure.Command.Args, " ")))
+		if failure.Phase != "" {
+			fmt.Fprintf(w, "   phase: %s\n", sanitizeBoundedDiagnosticText(string(failure.Phase)))
+		}
+		if target := failure.PrerequisiteTarget; target != nil {
+			fmt.Fprintf(w, "   attempted %s candidate: %s\n", sanitizeBoundedDiagnosticText(string(target.Kind)), sanitizeBoundedDiagnosticText(target.AttemptedCandidate))
+		}
+		if cause := dotfilesFailureCause(failure); cause != "" {
+			fmt.Fprintf(w, "   cause: %s\n", cause)
+		}
+		if failure.Executable != "" || failure.Runner != "" || len(failure.Command.Args) != 0 {
+			fmt.Fprintf(w, "   executable: %s\n   runner: %s\n   command: %s\n", sanitizeTerminalText(failure.Executable), sanitizeTerminalText(failure.Runner), sanitizeTerminalText(strings.Join(failure.Command.Args, " ")))
+		}
 		if failure.ExitCode != nil {
 			fmt.Fprintf(w, "   exit code: %d\n", *failure.ExitCode)
 		}
@@ -119,24 +132,43 @@ func renderLinkDetails(w io.Writer, result execution.StepResult) {
 	}
 }
 
+func dotfilesFailureCause(failure *execution.DotfilesFailure) string {
+	if errors.Is(failure, fs.ErrNotExist) {
+		return "path does not exist"
+	}
+	if errors.Is(failure, execution.ErrDotfilesPathEscapes) {
+		return "path escapes dotfiles base"
+	}
+	if errors.Is(failure, execution.ErrInvalidDotfileModule) {
+		return "invalid dotfile module"
+	}
+	if errors.Is(failure, execution.ErrInvalidDotlinkReport) {
+		return "invalid dotlink report"
+	}
+	if errors.Is(failure, execution.ErrDotlinkCommandFailed) {
+		return "dotlink command failed"
+	}
+	return ""
+}
+
 func renderBaseDiagnostic(w io.Writer, label string, diagnostic *execution.DotfilesBaseDiagnostic) {
 	if diagnostic == nil {
 		return
 	}
-	modules := sanitizeTerminalText(strings.Join(diagnostic.Modules, ", "))
+	modules := sanitizeBoundedDiagnosticText(strings.Join(diagnostic.Modules, ", "))
 	if diagnostic.CanonicalPath != "" {
-		fmt.Fprintf(w, "   %s: canonical base=%s source=%s modules=%s\n", label, sanitizeTerminalText(diagnostic.CanonicalPath), sanitizeTerminalText(string(diagnostic.Source)), modules)
+		fmt.Fprintf(w, "   %s: canonical base=%s source=%s modules=%s\n", label, sanitizeBoundedDiagnosticText(diagnostic.CanonicalPath), sanitizeBoundedDiagnosticText(string(diagnostic.Source)), modules)
 		return
 	}
-	fmt.Fprintf(w, "   %s: source=%s attempted candidate=%s modules=%s", label, sanitizeTerminalText(string(diagnostic.Source)), sanitizeTerminalText(diagnostic.AttemptedCandidate), modules)
+	fmt.Fprintf(w, "   %s: source=%s attempted candidate=%s modules=%s", label, sanitizeBoundedDiagnosticText(string(diagnostic.Source)), sanitizeBoundedDiagnosticText(diagnostic.AttemptedCandidate), modules)
 	if diagnostic.Cause != "" {
-		fmt.Fprintf(w, " cause=%s", sanitizeTerminalText(diagnostic.Cause))
+		fmt.Fprintf(w, " cause=%s", sanitizeBoundedDiagnosticText(diagnostic.Cause))
 	}
 	fmt.Fprintln(w)
 }
 
 func sameBaseDiagnostic(primary execution.DotfilesBaseDiagnostic, snapshot *execution.DotfilesBaseDiagnostic) bool {
-	if snapshot == nil || primary.Source != snapshot.Source || primary.AttemptedCandidate != snapshot.AttemptedCandidate || primary.CanonicalPath != snapshot.CanonicalPath || len(primary.Modules) != len(snapshot.Modules) {
+	if snapshot == nil || primary.Source != snapshot.Source || primary.AttemptedCandidate != snapshot.AttemptedCandidate || primary.CanonicalPath != snapshot.CanonicalPath || primary.Cause != snapshot.Cause || len(primary.Modules) != len(snapshot.Modules) {
 		return false
 	}
 	for i := range primary.Modules {
@@ -157,6 +189,30 @@ func sanitizeTerminalText(value string) string {
 		sanitized.WriteRune(r)
 	}
 	return sanitized.String()
+}
+
+const (
+	maxRenderedDiagnosticBytes  = 4096
+	renderedDiagnosticTruncated = "...[truncated]"
+)
+
+func sanitizeBoundedDiagnosticText(value string) string {
+	sanitized := sanitizeTerminalText(value)
+	if len(sanitized) <= maxRenderedDiagnosticBytes {
+		return sanitized
+	}
+
+	var bounded strings.Builder
+	bounded.Grow(maxRenderedDiagnosticBytes)
+	for _, r := range sanitized {
+		encoded := string(r)
+		if bounded.Len()+len(encoded)+len(renderedDiagnosticTruncated) > maxRenderedDiagnosticBytes {
+			break
+		}
+		bounded.WriteString(encoded)
+	}
+	bounded.WriteString(renderedDiagnosticTruncated)
+	return bounded.String()
 }
 
 func renderExecutionSummary(w io.Writer, results []execution.StepResult) {

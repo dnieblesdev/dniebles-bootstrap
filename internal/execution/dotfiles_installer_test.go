@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -189,6 +190,23 @@ func TestDotfilesInstallerProviderErrorHasNoInferredLinks(t *testing.T) {
 	result := NewDotfilesInstaller(&fakeDotfilesProvider{err: providerErr}).Install(context.Background(), planning.PlanStep{Ref: planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "bash"}})
 	if result.Status != StepStatusFailed || len(result.LinkDetails) != 0 || !errors.Is(result.Err, providerErr) {
 		t.Fatalf("result = %#v, want failed result without inferred links", result)
+	}
+}
+
+func TestDotfilesInstallerPreservesPrerequisiteFailureWithoutLinks(t *testing.T) {
+	runner := &fakeCommandRunner{}
+	provider := newFakeLocalProvider("/repo", runner)
+	provider.Stat = statDirs("/repo", "/repo/bash")
+
+	result := NewDotfilesInstaller(provider).Install(context.Background(), planning.PlanStep{Ref: planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "bash"}})
+	if result.Status != StepStatusFailed || len(result.LinkDetails) != 0 || result.Failure != nil || result.DotfilesFailure == nil {
+		t.Fatalf("result = %#v, want failed prerequisite result without inferred links", result)
+	}
+	if result.DotfilesFailure.Phase != DotfilesPhasePrerequisite || result.DotfilesFailure.PrerequisiteTarget == nil || result.DotfilesFailure.PrerequisiteTarget.AttemptedCandidate != "/repo/bin/dotlink" || !errors.Is(result.Err, os.ErrNotExist) {
+		t.Fatalf("result = %#v, want typed missing runner prerequisite facts", result)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %d, want 0", len(runner.calls))
 	}
 }
 
