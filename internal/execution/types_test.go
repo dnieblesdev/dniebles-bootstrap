@@ -2,6 +2,8 @@ package execution
 
 import (
 	"errors"
+	"io/fs"
+	"os/exec"
 	"testing"
 
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
@@ -25,6 +27,32 @@ func TestStepStatusVocabulary(t *testing.T) {
 				t.Fatalf("status = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDotfilesFailurePreservesPrerequisiteTargetAndIndependentCauses(t *testing.T) {
+	exit := &exec.ExitError{}
+	failure := &DotfilesFailure{
+		Phase: DotfilesPhasePrerequisite,
+		PrerequisiteTarget: &DotfilesPrerequisiteTarget{
+			Kind:               DotfilesPrerequisiteRunner,
+			AttemptedCandidate: "/repo/bin/dotlink",
+		},
+		PrerequisiteErr: errors.Join(fs.ErrNotExist, &fs.PathError{Op: "stat", Path: "/repo/bin/dotlink", Err: fs.ErrNotExist}),
+		ExecutionErr:    errors.Join(ErrDotlinkCommandFailed, exit),
+		ParseErr:        ErrInvalidDotlinkReport,
+	}
+
+	if failure.Phase != DotfilesPhasePrerequisite || failure.PrerequisiteTarget.Kind != DotfilesPrerequisiteRunner || failure.PrerequisiteTarget.AttemptedCandidate != "/repo/bin/dotlink" {
+		t.Fatalf("failure transport = %#v, want prerequisite runner candidate", failure)
+	}
+	if !errors.Is(failure, fs.ErrNotExist) || !errors.Is(failure, ErrDotlinkCommandFailed) || !errors.Is(failure, ErrInvalidDotlinkReport) {
+		t.Fatalf("failure did not preserve independent sentinel causes: %v", failure)
+	}
+	var gotExit *exec.ExitError
+	var gotPath *fs.PathError
+	if !errors.As(failure, &gotExit) || !errors.As(failure, &gotPath) {
+		t.Fatalf("failure did not preserve typed causes: %v", failure)
 	}
 }
 

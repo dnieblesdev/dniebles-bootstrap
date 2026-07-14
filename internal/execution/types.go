@@ -30,14 +30,40 @@ type StepResult struct {
 	DotfilesFailure *DotfilesFailure
 }
 
+type DotfilesPhase string
+
+const (
+	DotfilesPhaseResolution       DotfilesPhase = "resolution"
+	DotfilesPhasePrerequisite     DotfilesPhase = "prerequisite validation"
+	DotfilesPhaseCommandExecution DotfilesPhase = "command-execution"
+	DotfilesPhaseReportValidation DotfilesPhase = "report-validation"
+)
+
+type DotfilesPrerequisiteTargetKind string
+
+const (
+	DotfilesPrerequisiteRunner DotfilesPrerequisiteTargetKind = "runner"
+	DotfilesPrerequisiteModule DotfilesPrerequisiteTargetKind = "module"
+)
+
+// DotfilesPrerequisiteTarget identifies a lexical candidate before validation.
+// It never represents a canonical or validated path.
+type DotfilesPrerequisiteTarget struct {
+	Kind               DotfilesPrerequisiteTargetKind
+	AttemptedCandidate string
+}
+
 // DotfilesFailure retains safe execution and report-validation facts.
 type DotfilesFailure struct {
+	Phase              DotfilesPhase
 	Executable, Runner string
 	Command            CommandRequest
 	ExitCode           *int
 	Stderr             string
 	ReportStatus       DotlinkReportStatus
 	BaseSnapshot       *DotfilesBaseDiagnostic
+	PrerequisiteTarget *DotfilesPrerequisiteTarget
+	PrerequisiteErr    error
 	ExecutionErr       error
 	ParseErr           error
 }
@@ -47,7 +73,10 @@ func (f *DotfilesFailure) Error() string {
 }
 
 func (f *DotfilesFailure) Unwrap() []error {
-	errs := make([]error, 0, 2)
+	errs := make([]error, 0, 3)
+	if f.PrerequisiteErr != nil {
+		errs = append(errs, f.PrerequisiteErr)
+	}
 	if f.ExecutionErr != nil {
 		errs = append(errs, f.ExecutionErr)
 	}

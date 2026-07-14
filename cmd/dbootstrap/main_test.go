@@ -1673,6 +1673,46 @@ func TestRunApplyConfirmedDotfilesFailuresExitNonZero(t *testing.T) {
 	}
 }
 
+func TestRunApplyConfirmedMissingDotlinkRendersPrerequisiteDiagnostics(t *testing.T) {
+	base := makeDotfilesBase(t, "bash")
+	missingRunner := filepath.Join(base, "bin", "dotlink")
+	if err := os.Remove(missingRunner); err != nil {
+		t.Fatalf("remove dotlink: %v", err)
+	}
+	catalogPath := writeDotfilesCatalog(t, "bash")
+	stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"})
+	stubInstallationState(t, planning.InstallationState{})
+	stubConfigState(t, planning.ConfigState{})
+	stubDotfilesState(t, planning.InstallationState{})
+	stubBrewCommandExists(t, false)
+	runner := &recordingCommandRunner{}
+	stubExecutionFactories(t,
+		func() execution.CommandRunner { return runner },
+		func(planning.ResourceKind, execution.CommandRunner, execution.CommandExists) execution.Installer {
+			return nil
+		},
+		func(commandRunner execution.CommandRunner) execution.Installer {
+			return execution.NewDotfilesInstaller(execution.NewLocalDotfilesProvider(commandRunner, execution.DotfilesBaseResolver{
+				LookupEnv: func(string) (string, bool) { return base, true },
+				HomeDir:   func() (string, error) { return filepath.Dir(base), nil },
+			}))
+		},
+	)
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"apply", "--yes", "--resource", "dotfile:bash", "--catalog", catalogPath}, &stdout, &stderr); got != exitFailure {
+		t.Fatalf("exit code = %d, want %d", got, exitFailure)
+	}
+	for _, want := range []string{"dotfile:bash [failed]", "modules=bash", "phase: prerequisite validation", "attempted runner candidate: " + missingRunner, "cause: path does not exist"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q: %q", want, stdout.String())
+		}
+	}
+	if len(runner.calls) != 0 || stderr.Len() != 0 {
+		t.Fatalf("runner calls=%d stderr=%q, want no command and no stderr", len(runner.calls), stderr.String())
+	}
+}
+
 func TestRunApplyConfirmedMissingBrewReportsUnknownWithoutInstantiatingHomebrewInstaller(t *testing.T) {
 	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `
 schema = "dniebles.catalog"

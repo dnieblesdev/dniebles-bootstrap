@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
+	"strings"
 	"testing"
 
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/execution"
@@ -67,6 +70,103 @@ func TestRenderPlanResultIncludesSkippedAttentionAndDiagnostics(t *testing.T) {
 	wantStderr := "Diagnostics:\n- diagnostic: unknown bundle \"missing\"\n"
 	if got := stderr.String(); got != wantStderr {
 		t.Fatalf("stderr = %q, want %q", got, wantStderr)
+	}
+}
+
+func TestRenderLinkDetailsRendersCuratedPrerequisiteFacts(t *testing.T) {
+	base := &execution.DotfilesBaseDiagnostic{Source: execution.DotfilesBaseSourceEnv, CanonicalPath: "/repo", Modules: []string{"bash"}}
+	result := execution.StepResult{
+		Ref:            planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "bash"},
+		BaseDiagnostic: base,
+		DotfilesFailure: &execution.DotfilesFailure{
+			Phase: execution.DotfilesPhasePrerequisite,
+			PrerequisiteTarget: &execution.DotfilesPrerequisiteTarget{
+				Kind:               execution.DotfilesPrerequisiteRunner,
+				AttemptedCandidate: "/repo/bin/dotlink\x1b[2J",
+			},
+			PrerequisiteErr: errors.Join(fs.ErrNotExist, errors.New("sensitive wrapped detail")),
+			BaseSnapshot:    base,
+		},
+	}
+
+	var output bytes.Buffer
+	renderLinkDetails(&output, result)
+	got := output.String()
+	for _, want := range []string{"canonical base=/repo", "phase: prerequisite", "attempted runner candidate: /repo/bin/dotlink\\x1b[2J", "cause: path does not exist"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "sensitive wrapped detail") || strings.ContainsRune(got, '\x1b') || strings.Count(got, "canonical base=/repo") != 1 {
+		t.Fatalf("output rendered unsafe or duplicate facts: %q", got)
+	}
+}
+
+func TestRenderLinkDetailsRendersCommandAndReportFailureDiagnostics(t *testing.T) {
+	tests := []struct {
+		name    string
+		failure *execution.DotfilesFailure
+		want    []string
+	}{
+		{
+			name:    "command execution",
+			failure: &execution.DotfilesFailure{Phase: execution.DotfilesPhaseCommandExecution, ExecutionErr: execution.ErrDotlinkCommandFailed},
+			want:    []string{"phase: command-execution", "cause: dotlink command failed"},
+		},
+		{
+			name:    "report validation",
+			failure: &execution.DotfilesFailure{Phase: execution.DotfilesPhaseReportValidation, ParseErr: execution.ErrInvalidDotlinkReport},
+			want:    []string{"phase: report-validation", "cause: invalid dotlink report"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			renderLinkDetails(&output, execution.StepResult{DotfilesFailure: tt.failure})
+			for _, want := range tt.want {
+				if !strings.Contains(output.String(), want) {
+					t.Fatalf("rendered output missing %q: %q", want, output.String())
+				}
+			}
+		})
+	}
+}
+
+func TestRenderLinkDetailsBoundsOversizedPrerequisiteCandidate(t *testing.T) {
+	candidate := strings.Repeat("p", 5000)
+	result := execution.StepResult{DotfilesFailure: &execution.DotfilesFailure{
+		Phase: execution.DotfilesPhasePrerequisite,
+		PrerequisiteTarget: &execution.DotfilesPrerequisiteTarget{
+			Kind:               execution.DotfilesPrerequisiteRunner,
+			AttemptedCandidate: candidate,
+		},
+		PrerequisiteErr: fs.ErrNotExist,
+	}}
+
+	var output bytes.Buffer
+	renderLinkDetails(&output, result)
+	got := output.String()
+	want := "attempted runner candidate: " + strings.Repeat("p", 4082) + "...[truncated]"
+	if !strings.Contains(got, want) || strings.Contains(got, candidate) {
+		t.Fatalf("output = %q, want bounded prerequisite candidate", got)
+	}
+}
+
+func TestRenderLinkDetailsBoundsOversizedBaseAttemptedCandidate(t *testing.T) {
+	candidate := strings.Repeat("b", 5000)
+	result := execution.StepResult{BaseDiagnostic: &execution.DotfilesBaseDiagnostic{
+		Source:             execution.DotfilesBaseSourceEnv,
+		AttemptedCandidate: candidate,
+		Modules:            []string{"bash"},
+	}}
+
+	var output bytes.Buffer
+	renderLinkDetails(&output, result)
+	got := output.String()
+	want := "attempted candidate=" + strings.Repeat("b", 4082) + "...[truncated]"
+	if !strings.Contains(got, want) || strings.Contains(got, candidate) {
+		t.Fatalf("output = %q, want bounded base attempted candidate", got)
 	}
 }
 
@@ -257,6 +357,19 @@ func TestRenderLinkDetailsLabelsDifferentBaseSnapshots(t *testing.T) {
 	renderLinkDetails(&output, result)
 	if got := output.String(); !bytes.Contains([]byte(got), []byte("report base context:")) || !bytes.Contains([]byte(got), []byte("failure base context:")) {
 		t.Fatalf("output = %q, want explicit labels for differing snapshots", got)
+	}
+}
+
+func TestRenderLinkDetailsKeepsDistinctBaseCauses(t *testing.T) {
+	result := execution.StepResult{
+		BaseDiagnostic:  &execution.DotfilesBaseDiagnostic{Source: execution.DotfilesBaseSourceEnv, AttemptedCandidate: "/candidate", Modules: []string{"bash"}, Cause: "first cause"},
+		DotfilesFailure: &execution.DotfilesFailure{BaseSnapshot: &execution.DotfilesBaseDiagnostic{Source: execution.DotfilesBaseSourceEnv, AttemptedCandidate: "/candidate", Modules: []string{"bash"}, Cause: "second cause"}},
+	}
+	var output bytes.Buffer
+	renderLinkDetails(&output, result)
+	got := output.String()
+	if !strings.Contains(got, "report base context:") || !strings.Contains(got, "failure base context:") || !strings.Contains(got, "cause=first cause") || !strings.Contains(got, "cause=second cause") {
+		t.Fatalf("output = %q, want both distinct base causes", got)
 	}
 }
 
