@@ -306,6 +306,53 @@ func TestDefaultCatalogIntegrityUsesRawDeclarations(t *testing.T) {
 	assertProfilePlansMatchRawClosure(t, catalog, raw)
 }
 
+func TestDefaultCatalogHomebrewTargets(t *testing.T) {
+	catalog, err := LoadFile("../../../catalog/bootstrap.toml")
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+
+	targets := map[planning.ResourceRef]struct {
+		packageName string
+		command     string
+	}{
+		{Kind: planning.ResourceKindPackage, Name: "nvim"}:     {packageName: "neovim", command: "nvim"},
+		{Kind: planning.ResourceKindTool, Name: "git"}:         {packageName: "git", command: "git"},
+		{Kind: planning.ResourceKindPackage, Name: "tealdeer"}: {packageName: "tealdeer", command: "tldr"},
+		{Kind: planning.ResourceKindPackage, Name: "zsh"}:      {packageName: "zsh", command: "zsh"},
+		{Kind: planning.ResourceKindPackage, Name: "bat"}:      {packageName: "bat", command: "bat"},
+		{Kind: planning.ResourceKindPackage, Name: "eza"}:      {packageName: "eza", command: "eza"},
+		{Kind: planning.ResourceKindPackage, Name: "fd"}:       {packageName: "fd", command: "fd"},
+		{Kind: planning.ResourceKindPackage, Name: "fzf"}:      {packageName: "fzf", command: "fzf"},
+		{Kind: planning.ResourceKindPackage, Name: "gh"}:       {packageName: "gh", command: "gh"},
+		{Kind: planning.ResourceKindPackage, Name: "starship"}: {packageName: "starship", command: "starship"},
+		{Kind: planning.ResourceKindPackage, Name: "zoxide"}:   {packageName: "zoxide", command: "zoxide"},
+	}
+
+	dev := planning.BuildPlan(catalog, planning.PlanRequest{Profile: "dev"}, planning.EnvironmentFacts{OS: "linux", Arch: "amd64"}, planning.ConfigState{PresentKeys: map[string]bool{"go.env": true}}, planning.InstallationState{})
+	planned := map[planning.ResourceRef]bool{}
+	for _, step := range dev.Plan.Steps {
+		planned[step.Ref] = true
+	}
+
+	for ref, want := range targets {
+		resource, ok := catalog.Resources[ref]
+		if !ok {
+			t.Errorf("default catalog missing %s", ref)
+			continue
+		}
+		if resource.Install == nil || resource.Install.Provider != "brew" || resource.Install.Package != want.packageName {
+			t.Errorf("%s install = %#v, want brew package %q", ref, resource.Install, want.packageName)
+		}
+		if resource.Presence == nil || resource.Presence.Kind != "command_exists" || resource.Presence.Name != want.command {
+			t.Errorf("%s presence = %#v, want command_exists %q", ref, resource.Presence, want.command)
+		}
+		if !planned[ref] {
+			t.Errorf("dev profile plan does not include %s", ref)
+		}
+	}
+}
+
 func TestRawCatalogRejectsOrphanedBrewResourceEvenWhenPointSelectable(t *testing.T) {
 	raw := rawCatalog{
 		Tools:    []rawResource{{ID: "workflow", Install: rawInstall{Provider: "brew", Package: "workflow"}, Presence: rawPresence{Kind: "command_exists", Name: "workflow"}}, {ID: "orphan", Install: rawInstall{Provider: "brew", Package: "orphan"}, Presence: rawPresence{Kind: "command_exists", Name: "orphan"}}},

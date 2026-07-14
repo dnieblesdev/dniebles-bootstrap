@@ -49,13 +49,123 @@ package = "jq"
 kind = "command_exists"
 name = "jq"
 
+[[packages]]
+id = "nvim"
+description = "Neovim editor"
+depends_on = ["tool:git"]
+[packages.install]
+provider = "brew"
+package = "neovim"
+[packages.presence]
+kind = "command_exists"
+name = "nvim"
+
+[[packages]]
+id = "tealdeer"
+description = "Fast tldr client"
+depends_on = ["tool:git"]
+[packages.install]
+provider = "brew"
+package = "tealdeer"
+[packages.presence]
+kind = "command_exists"
+name = "tldr"
+
+[[packages]]
+id = "zsh"
+description = "Z shell"
+depends_on = ["tool:git"]
+[packages.install]
+provider = "brew"
+package = "zsh"
+[packages.presence]
+kind = "command_exists"
+name = "zsh"
+
+[[packages]]
+id = "bat"
+description = "Syntax-highlighted cat"
+depends_on = ["tool:git"]
+[packages.install]
+provider = "brew"
+package = "bat"
+[packages.presence]
+kind = "command_exists"
+name = "bat"
+
+[[packages]]
+id = "eza"
+description = "Modern ls replacement"
+depends_on = ["tool:git"]
+[packages.install]
+provider = "brew"
+package = "eza"
+[packages.presence]
+kind = "command_exists"
+name = "eza"
+
+[[packages]]
+id = "fd"
+description = "Fast file finder"
+depends_on = ["tool:git"]
+[packages.install]
+provider = "brew"
+package = "fd"
+[packages.presence]
+kind = "command_exists"
+name = "fd"
+
+[[packages]]
+id = "fzf"
+description = "Command-line fuzzy finder"
+depends_on = ["tool:git"]
+[packages.install]
+provider = "brew"
+package = "fzf"
+[packages.presence]
+kind = "command_exists"
+name = "fzf"
+
+[[packages]]
+id = "gh"
+description = "GitHub CLI"
+depends_on = ["tool:git"]
+[packages.install]
+provider = "brew"
+package = "gh"
+[packages.presence]
+kind = "command_exists"
+name = "gh"
+
+[[packages]]
+id = "starship"
+description = "Cross-shell prompt"
+depends_on = ["tool:git"]
+[packages.install]
+provider = "brew"
+package = "starship"
+[packages.presence]
+kind = "command_exists"
+name = "starship"
+
+[[packages]]
+id = "zoxide"
+description = "Smarter cd command"
+depends_on = ["tool:git"]
+[packages.install]
+provider = "brew"
+package = "zoxide"
+[packages.presence]
+kind = "command_exists"
+name = "zoxide"
+
 [[dotfiles]]
 id = "bash"
 description = "Bash dotfiles"
 
 [[bundles]]
 id = "cli"
-resources = ["tool:git", "package:ripgrep", "package:jq"]
+resources = ["tool:git", "package:ripgrep", "package:jq", "package:nvim", "package:tealdeer", "package:zsh", "package:bat", "package:eza", "package:fd", "package:fzf", "package:gh", "package:starship", "package:zoxide"]
 
 [[profiles]]
 id = "dev"
