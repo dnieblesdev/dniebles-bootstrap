@@ -287,6 +287,12 @@ func buildApplyRunner(mode applyMode, facts planning.EnvironmentFacts, plan plan
 			brewPackage = missingHomebrewInstaller{kind: planning.ResourceKindPackage}
 		}
 	}
+	runtimeInstaller := execution.NoopForKind(planning.ResourceKindRuntime)
+	if planHasEligibleGoRuntime(plan) {
+		runtimeInstaller = goRuntimeHomebrewInstaller{
+			delegate: newHomebrewInstaller(planning.ResourceKindRuntime, commandRunner(), brewCommandExists),
+		}
+	}
 	var toolApt, packageApt execution.Installer
 	if hasApt {
 		if facts.OS == "linux" {
@@ -305,7 +311,7 @@ func buildApplyRunner(mode applyMode, facts planning.EnvironmentFacts, plan plan
 	}
 	return execution.NewRunner(
 		toolInstaller,
-		execution.NoopForKind(planning.ResourceKindRuntime),
+		runtimeInstaller,
 		packageInstaller,
 		dotfilesInstaller,
 	)
@@ -384,6 +390,16 @@ func planHasBrewBackedInstall(plan planning.Plan) bool {
 	return false
 }
 
+func planHasEligibleGoRuntime(plan planning.Plan) bool {
+	for _, step := range plan.Steps {
+		if step.Ref.Kind == planning.ResourceKindRuntime && step.Ref.Name == "go" && step.Resource.Install != nil &&
+			step.Resource.Install.Provider == "brew" && step.Resource.Install.Package == "go" {
+			return true
+		}
+	}
+	return false
+}
+
 func planHasDotfileSteps(plan planning.Plan) bool {
 	for _, step := range plan.Steps {
 		if step.Ref.Kind == planning.ResourceKindDotfile {
@@ -404,6 +420,22 @@ func hasFailedExecutionResult(report execution.ExecutionReport) bool {
 
 type missingHomebrewInstaller struct {
 	kind planning.ResourceKind
+}
+
+type goRuntimeHomebrewInstaller struct {
+	delegate execution.Installer
+}
+
+func (i goRuntimeHomebrewInstaller) SupportedKind() planning.ResourceKind {
+	return planning.ResourceKindRuntime
+}
+
+func (i goRuntimeHomebrewInstaller) Install(ctx context.Context, step planning.PlanStep) execution.StepResult {
+	if step.Ref.Kind != planning.ResourceKindRuntime || step.Ref.Name != "go" || step.Resource.Install == nil ||
+		step.Resource.Install.Provider != "brew" || step.Resource.Install.Package != "go" || i.delegate == nil {
+		return execution.NoopForKind(planning.ResourceKindRuntime).Install(ctx, step)
+	}
+	return i.delegate.Install(ctx, step)
 }
 
 func (i missingHomebrewInstaller) SupportedKind() planning.ResourceKind { return i.kind }

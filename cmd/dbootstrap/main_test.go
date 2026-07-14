@@ -748,6 +748,136 @@ func TestRunApplyCommand(t *testing.T) {
 	}
 }
 
+func TestDefaultCatalogGoRuntimeHasHomebrewMetadata(t *testing.T) {
+	catalog, err := catalogtoml.LoadFile("../../catalog/bootstrap.toml")
+	if err != nil {
+		t.Fatalf("LoadFile() error = %v", err)
+	}
+
+	goRuntime, ok := catalog.Resources[planning.ResourceRef{Kind: planning.ResourceKindRuntime, Name: "go"}]
+	if !ok {
+		t.Fatal("default catalog does not contain runtime:go")
+	}
+	if goRuntime.Presence == nil || goRuntime.Presence.Kind != "command_exists" || goRuntime.Presence.Name != "go" {
+		t.Fatalf("runtime:go presence = %#v, want command_exists go", goRuntime.Presence)
+	}
+	if goRuntime.Install == nil || goRuntime.Install.Provider != "brew" || goRuntime.Install.Package != "go" {
+		t.Fatalf("runtime:go install = %#v, want brew/go", goRuntime.Install)
+	}
+
+	devProfile := catalog.Profiles["dev"]
+	wantRuntime := planning.ResourceRef{Kind: planning.ResourceKindRuntime, Name: "go"}
+	if !containsResourceRef(devProfile.Resources, wantRuntime) {
+		t.Fatalf("dev profile resources = %#v, want %v", devProfile.Resources, wantRuntime)
+	}
+}
+
+func TestConfirmedGoRuntimeHomebrewInstallation(t *testing.T) {
+	tests := []struct {
+		name              string
+		catalog           string
+		installationState planning.InstallationState
+		brewExists        bool
+		commandResult     execution.CommandResult
+		wantCode          int
+		wantCalls         []execution.CommandRequest
+		wantOutput        string
+	}{
+		{
+			name:    "present Go skips installation",
+			catalog: writeGoRuntimeCatalog(t, "go", "brew", "go"),
+			installationState: planning.InstallationState{PresentResources: map[planning.ResourceRef]bool{
+				{Kind: planning.ResourceKindRuntime, Name: "go"}: true,
+			}},
+			brewExists: false,
+			wantCode:   exitSuccess,
+			wantOutput: "runtime:go [unchanged] already installed",
+		},
+		{
+			name:          "absent Go installs through Homebrew",
+			catalog:       writeGoRuntimeCatalog(t, "go", "brew", "go"),
+			brewExists:    true,
+			commandResult: execution.CommandResult{Status: execution.CommandStatusSucceeded},
+			wantCode:      exitSuccess,
+			wantCalls:     []execution.CommandRequest{{Executable: "brew", Args: []string{"install", "go"}}},
+			wantOutput:    "runtime:go [changed] installed go with Homebrew",
+		},
+		{
+			name:       "missing Homebrew leaves Go unsatisfied",
+			catalog:    writeGoRuntimeCatalog(t, "go", "brew", "go"),
+			brewExists: false,
+			wantCode:   exitFailure,
+			wantOutput: "runtime:go [failed] brew executable is not available on PATH",
+		},
+		{
+			name:          "Homebrew install failure leaves Go unsatisfied",
+			catalog:       writeGoRuntimeCatalog(t, "go", "brew", "go"),
+			brewExists:    true,
+			commandResult: execution.CommandResult{Status: execution.CommandStatusFailed, Err: errors.New("brew failed")},
+			wantCode:      exitFailure,
+			wantCalls:     []execution.CommandRequest{{Executable: "brew", Args: []string{"install", "go"}}},
+			wantOutput:    "runtime:go [failed] brew install go failed with status failed",
+		},
+		{
+			name:          "unsupported runtime remains not implemented",
+			catalog:       writeGoRuntimeCatalog(t, "rust", "brew", "rust"),
+			brewExists:    true,
+			commandResult: execution.CommandResult{Status: execution.CommandStatusSucceeded},
+			wantCode:      exitSuccess,
+			wantOutput:    "runtime:rust [not supported yet]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "darwin", Arch: "arm64"})
+			stubInstallationState(t, tt.installationState)
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+			stubBrewCommandExists(t, tt.brewExists)
+			runner := &recordingCommandRunner{result: tt.commandResult}
+			stubExecutionFactories(t, func() execution.CommandRunner { return runner }, newHomebrewInstaller, newDotfilesInstaller)
+
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{"apply", "--profile", "dev", "--catalog", tt.catalog, "--yes"}, &stdout, &stderr); code != tt.wantCode {
+				t.Fatalf("run() exit code = %d, want %d; stdout=%q stderr=%q", code, tt.wantCode, stdout.String(), stderr.String())
+			}
+			if !reflect.DeepEqual(runner.calls, tt.wantCalls) {
+				t.Fatalf("command calls = %#v, want %#v", runner.calls, tt.wantCalls)
+			}
+			if !strings.Contains(stdout.String(), tt.wantOutput) {
+				t.Fatalf("stdout = %q, want it to contain %q", stdout.String(), tt.wantOutput)
+			}
+		})
+	}
+}
+
+func TestGoRuntimeSafeModesDoNotRunHomebrew(t *testing.T) {
+	for _, args := range [][]string{
+		{"apply", "--profile", "dev"},
+		{"apply", "--profile", "dev", "--dry-run"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "darwin", Arch: "arm64"})
+			stubInstallationState(t, planning.InstallationState{})
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+			stubBrewCommandExists(t, true)
+			runner := &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded}}
+			stubExecutionFactories(t, func() execution.CommandRunner { return runner }, newHomebrewInstaller, newDotfilesInstaller)
+
+			var stdout, stderr bytes.Buffer
+			args = append(args, "--catalog", writeGoRuntimeCatalog(t, "go", "brew", "go"))
+			if code := run(args, &stdout, &stderr); code != exitSuccess {
+				t.Fatalf("run() exit code = %d, want %d; stdout=%q stderr=%q", code, exitSuccess, stdout.String(), stderr.String())
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("command calls = %#v, want no mutations", runner.calls)
+			}
+		})
+	}
+}
+
 func TestResolveDefaultCatalogPath(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -1305,6 +1435,7 @@ resources = ["tool:fd", "package:ripgrep", "runtime:go"]
 		{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching ripgrep", Err: errors.New("exit 1")},
 		{Status: execution.CommandStatusSucceeded, ExitCode: 0},
 		{Status: execution.CommandStatusSucceeded, ExitCode: 0},
+		{Status: execution.CommandStatusSucceeded, ExitCode: 0},
 	}}
 	stubExecutionFactories(t,
 		func() execution.CommandRunner { return runner },
@@ -1324,8 +1455,8 @@ resources = ["tool:fd", "package:ripgrep", "runtime:go"]
 	if gotCode != exitSuccess {
 		t.Fatalf("run() exit code = %d, want %d", gotCode, exitSuccess)
 	}
-	if len(runner.calls) != 3 {
-		t.Fatalf("command runner calls = %d, want 3", len(runner.calls))
+	if len(runner.calls) != 4 {
+		t.Fatalf("command runner calls = %d, want 4", len(runner.calls))
 	}
 	if got := runner.calls[0]; got.Executable != "dpkg-query" || strings.Join(got.Args, " ") != "--show --showformat=${Status} ripgrep" {
 		t.Fatalf("CommandRequest = %#v, want dpkg-query --show --showformat=${Status} ripgrep", got)
@@ -1333,7 +1464,10 @@ resources = ["tool:fd", "package:ripgrep", "runtime:go"]
 	if got := runner.calls[1]; got.Executable != "apt-get" || strings.Join(got.Args, " ") != "install -y -- ripgrep" {
 		t.Fatalf("CommandRequest = %#v, want apt-get install -y -- ripgrep", got)
 	}
-	if got := runner.calls[2]; got.Executable != "brew" || strings.Join(got.Args, " ") != "install fd" {
+	if got := runner.calls[2]; got.Executable != "brew" || strings.Join(got.Args, " ") != "install go" {
+		t.Fatalf("CommandRequest = %#v, want brew install go", got)
+	}
+	if got := runner.calls[3]; got.Executable != "brew" || strings.Join(got.Args, " ") != "install fd" {
 		t.Fatalf("CommandRequest = %#v, want brew install fd", got)
 	}
 	out := stdout.String()
@@ -1341,7 +1475,7 @@ resources = ["tool:fd", "package:ripgrep", "runtime:go"]
 		"Mode: confirmed",
 		"tool:fd [changed] installed fd with Homebrew",
 		"package:ripgrep [changed] installed ripgrep with APT",
-		"runtime:go [not supported yet] noop installer does not perform real installation",
+		"runtime:go [changed] installed go with Homebrew",
 		"Manual Actions:\n- none\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -2120,6 +2254,36 @@ id = "dev"
 bundles = ["cli"]
 resources = ["runtime:go"]
 `)
+}
+
+func writeGoRuntimeCatalog(t *testing.T, runtimeID, provider, packageName string) string {
+	t.Helper()
+	return writeFile(t, t.TempDir(), "go-runtime.toml", fmt.Sprintf(`schema = "dniebles.catalog"
+version = 1
+
+[[runtimes]]
+id = %q
+description = "Runtime fixture"
+[runtimes.install]
+provider = %q
+package = %q
+[runtimes.presence]
+kind = "command_exists"
+name = %q
+
+[[profiles]]
+id = "dev"
+resources = [%q]
+`, runtimeID, provider, packageName, runtimeID, "runtime:"+runtimeID))
+}
+
+func containsResourceRef(refs []planning.ResourceRef, want planning.ResourceRef) bool {
+	for _, ref := range refs {
+		if ref == want {
+			return true
+		}
+	}
+	return false
 }
 
 func replaceCatalogPath(args []string, path string) []string {
