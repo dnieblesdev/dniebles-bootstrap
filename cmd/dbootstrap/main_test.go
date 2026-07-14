@@ -1476,9 +1476,9 @@ func TestRunApplyConfirmedDotfilesUsesInjectedRunner(t *testing.T) {
 		"Mode: confirmed",
 		"Confirmed mode: brew-backed tool/package steps, eligible Linux APT-backed tool/package steps, and selected dotfile resources may have changed this machine",
 		"dotfile:bash [changed] installed dotfile module bash",
-		"dotfiles base: " + base,
-		"source: env",
-		"modules: bash",
+		"dotfiles base: canonical base=" + base,
+		"source=env",
+		"modules=bash",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout missing %q; got %q", want, out)
@@ -1507,7 +1507,7 @@ func TestRunApplyConfirmedDotfilesFailuresExitNonZero(t *testing.T) {
 			module:      "bash",
 			baseSetup:   func(t *testing.T) string { return filepath.Join(t.TempDir(), "missing-dotfiles") },
 			runner:      &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded, ExitCode: 0}},
-			wantMessage: "resolve dotfiles base",
+			wantMessage: "dotfile module bash failed",
 			wantDetails: []string{
 				"dotfiles base: source=env",
 				"attempted candidate=", // The full candidate is asserted from the temp path below.
@@ -1526,14 +1526,14 @@ func TestRunApplyConfirmedDotfilesFailuresExitNonZero(t *testing.T) {
 				return base
 			},
 			runner:      &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded, ExitCode: 0}},
-			wantMessage: "validate dotlink",
+			wantMessage: "dotfile module bash failed",
 		},
 		{
 			name:        "missing module",
 			module:      "zsh",
 			baseSetup:   func(t *testing.T) string { return makeDotfilesBase(t, "bash") },
 			runner:      &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded, ExitCode: 0}},
-			wantMessage: "validate module \"zsh\"",
+			wantMessage: "dotfile module zsh failed",
 		},
 		{
 			name:      "runner failure",

@@ -323,5 +323,5 @@ func translateFailure(failure *dotlinkWireFailure) *DotlinkFailure {
 }
 
 func invalidDotlinkReport(err error) error {
-	return fmt.Errorf("%w: report validation failed", ErrInvalidDotlinkReport)
+	return errors.Join(ErrInvalidDotlinkReport, err)
 }

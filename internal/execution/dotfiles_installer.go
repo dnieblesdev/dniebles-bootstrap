@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 )
@@ -44,11 +43,18 @@ func (i *DotfilesInstaller) Install(ctx context.Context, step planning.PlanStep)
 		diagnostic := baseResolution.Diagnostic
 		report, err := provider.RunDotlinkReportWithExecutionContext(ctx, modules, baseResolution)
 		if err != nil {
-			return failedDotfilesStep(step, module, err, baseContext(diagnostic), &diagnostic)
+			result := translateDotlinkReport(step, report, "", &diagnostic)
+			result.Status = StepStatusFailed
+			result.Message = fmt.Sprintf("dotfile module %s failed", module)
+			result.Err = err
+			var failure *DotfilesFailure
+			if errors.As(err, &failure) {
+				result.DotfilesFailure = failure
+			}
+			return result
 		}
-		return translateDotlinkReport(step, report, baseContext(diagnostic), &diagnostic)
+		return translateDotlinkReport(step, report, "", &diagnostic)
 	}
-	baseContext := i.baseContext(modules)
 	var diagnostic *DotfilesBaseDiagnostic
 	if reporter, ok := i.provider.(DotfilesBaseDiagnosticReporter); ok {
 		value := reporter.DotfilesBaseDiagnostic(modules)
@@ -57,19 +63,24 @@ func (i *DotfilesInstaller) Install(ctx context.Context, step planning.PlanStep)
 	reportProvider, ok := i.provider.(DotlinkReportProvider)
 	if !ok {
 		if err := i.provider.RunDotlink(ctx, modules); err != nil {
-			return failedDotfilesStep(step, module, err, baseContext, diagnostic)
+			return failedDotfilesStep(step, module, err, "", diagnostic)
 		}
-		return StepResult{Ref: step.Ref, Status: StepStatusInstalled, Message: fmt.Sprintf("installed dotfile module %s%s", module, baseContext), BaseDiagnostic: diagnostic}
+		return StepResult{Ref: step.Ref, Status: StepStatusInstalled, Message: fmt.Sprintf("installed dotfile module %s", module), BaseDiagnostic: diagnostic}
 	}
 	report, err := reportProvider.RunDotlinkReport(ctx, modules)
 	if err != nil {
-		return failedDotfilesStep(step, module, err, baseContext, diagnostic)
+		return failedDotfilesStep(step, module, err, "", diagnostic)
 	}
-	return translateDotlinkReport(step, report, baseContext, diagnostic)
+	return translateDotlinkReport(step, report, "", diagnostic)
 }
 
 func failedDotfilesStep(step planning.PlanStep, module string, err error, baseContext string, diagnostic *DotfilesBaseDiagnostic) StepResult {
-	return StepResult{Ref: step.Ref, Status: StepStatusFailed, Message: fmt.Sprintf("dotfile module %s failed: %v%s", module, err, baseContext), Err: err, BaseDiagnostic: diagnostic}
+	result := StepResult{Ref: step.Ref, Status: StepStatusFailed, Message: fmt.Sprintf("dotfile module %s failed", module), Err: err, BaseDiagnostic: diagnostic}
+	var failure *DotfilesFailure
+	if errors.As(err, &failure) {
+		result.DotfilesFailure = failure
+	}
+	return result
 }
 
 func translateDotlinkReport(step planning.PlanStep, report DotlinkLinkReport, baseContext string, diagnostic *DotfilesBaseDiagnostic) StepResult {
@@ -112,23 +123,4 @@ func translateDotlinkReport(step planning.PlanStep, report DotlinkLinkReport, ba
 
 func rollbackRecoveryContext(rollback LinkRollback) string {
 	return fmt.Sprintf(" (rollback attempted=%t completed=%t; recovery: verify rollback state and restore affected targets before retrying dotlink)", rollback.Attempted, rollback.Completed)
-}
-
-func (i *DotfilesInstaller) baseContext(modules []string) string {
-	reporter, ok := i.provider.(DotfilesBaseReporter)
-	if !ok {
-		return ""
-	}
-	base, err := reporter.DotfilesBase()
-	if err != nil {
-		return ""
-	}
-	return fmt.Sprintf(" (dotfiles base: %s; source: %s; modules: %s)", base.CanonicalPath, base.Source, strings.Join(modules, ", "))
-}
-
-func baseContext(diagnostic DotfilesBaseDiagnostic) string {
-	if diagnostic.CanonicalPath == "" {
-		return ""
-	}
-	return fmt.Sprintf(" (dotfiles base: %s; source: %s; modules: %s)", diagnostic.CanonicalPath, diagnostic.Source, strings.Join(diagnostic.Modules, ", "))
 }

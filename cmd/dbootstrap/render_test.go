@@ -237,6 +237,29 @@ func TestRenderExecutionReportRendersDotlinkDetailsAndBaseDiagnostic(t *testing.
 	}
 }
 
+func TestRenderLinkDetailsRendersExecutionFactsAndDeduplicatesBase(t *testing.T) {
+	base := &execution.DotfilesBaseDiagnostic{Source: execution.DotfilesBaseSourceEnv, CanonicalPath: "/repo", Modules: []string{"bash"}}
+	result := execution.StepResult{BaseDiagnostic: base, DotfilesFailure: &execution.DotfilesFailure{Executable: "/repo/bin/dotlink", Runner: "CommandRunner", Command: execution.CommandRequest{Args: []string{"link", "bash"}}, Stderr: `bad\x1b[31m`, BaseSnapshot: &execution.DotfilesBaseDiagnostic{Source: execution.DotfilesBaseSourceEnv, CanonicalPath: "/repo", Modules: []string{"bash"}}}}
+	var output bytes.Buffer
+	renderLinkDetails(&output, result)
+	got := output.String()
+	if bytes.Count([]byte(got), []byte("canonical base=/repo")) != 1 || !bytes.Contains([]byte(got), []byte("executable: /repo/bin/dotlink")) || bytes.Contains([]byte(got), []byte("\x1b")) {
+		t.Fatalf("output = %q, want one base and labeled sanitized execution facts", got)
+	}
+}
+
+func TestRenderLinkDetailsLabelsDifferentBaseSnapshots(t *testing.T) {
+	result := execution.StepResult{
+		BaseDiagnostic:  &execution.DotfilesBaseDiagnostic{Source: execution.DotfilesBaseSourceEnv, CanonicalPath: "/report", Modules: []string{"bash"}},
+		DotfilesFailure: &execution.DotfilesFailure{BaseSnapshot: &execution.DotfilesBaseDiagnostic{Source: execution.DotfilesBaseSourceHome, AttemptedCandidate: "/failure", Modules: []string{"bash"}}},
+	}
+	var output bytes.Buffer
+	renderLinkDetails(&output, result)
+	if got := output.String(); !bytes.Contains([]byte(got), []byte("report base context:")) || !bytes.Contains([]byte(got), []byte("failure base context:")) {
+		t.Fatalf("output = %q, want explicit labels for differing snapshots", got)
+	}
+}
+
 func TestRenderExecutionReportPreservesRemovedRollbackPathsWithoutAttemptFlag(t *testing.T) {
 	report := execution.ExecutionReport{Results: []execution.StepResult{{
 		Ref:      planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "bash"},
