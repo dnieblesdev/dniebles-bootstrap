@@ -30,9 +30,14 @@ func TestHomebrewStableChannelValidation_PRHeadLocalFormulaContract(t *testing.T
 		"macos-14",
 		"ref: ${{ github.event.pull_request.head.sha }}",
 		"persist-credentials: false",
-		"HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source ./Formula/dbootstrap.rb",
-		"brew audit --strict --formula Formula/dbootstrap.rb",
-		"brew style Formula/dbootstrap.rb",
+		"local/pr-candidate/dbootstrap",
+		"homebrew-pr-candidate",
+		"original-formula-sha256.txt",
+		"staged-formula-sha256.txt",
+		"cmp homebrew-receipt/original-formula-sha256.txt homebrew-receipt/staged-formula-sha256.txt",
+		"brew audit --strict --formula local/pr-candidate/dbootstrap",
+		"brew style local/pr-candidate/dbootstrap",
+		"HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source local/pr-candidate/dbootstrap",
 		"if: always()",
 	} {
 		if !strings.Contains(content, want) {
@@ -43,8 +48,11 @@ func TestHomebrewStableChannelValidation_PRHeadLocalFormulaContract(t *testing.T
 	for _, forbidden := range []string{
 		"workflow_dispatch:", "push:", "workflow_call:", "contents: write", "GITHUB_TOKEN",
 		"secrets.", "persist-credentials: true", "gh release", "release-publish.yml",
-		"git tag", "git push", "upload-release-asset", "docker", "qemu", "brew tap ",
+		"git tag", "git push", "upload-release-asset", "docker", "qemu", "brew tap ", "git init", "git clone",
 		"dnieblesdev/dniebles-bootstrap/dbootstrap",
+		"brew audit --strict --formula Formula/dbootstrap.rb",
+		"brew style Formula/dbootstrap.rb",
+		"brew install --build-from-source ./Formula/dbootstrap.rb",
 	} {
 		if strings.Contains(strings.ToLower(content), strings.ToLower(forbidden)) {
 			t.Errorf("workflow must not contain %q", forbidden)
@@ -77,6 +85,8 @@ func TestHomebrewStableChannelValidation_NativeReceiptAndFailClosedContract(t *t
 		"brew uninstall dbootstrap",
 		"macOS is unsupported",
 		"release asset request count: 0",
+		"HOMEBREW_CACHE=\"$RUNNER_TEMP/homebrew-empty-cache\"",
+		"HOMEBREW_NO_AUTO_UPDATE=1",
 		"actions/upload-artifact@",
 	} {
 		if !strings.Contains(content, want) {
@@ -89,5 +99,11 @@ func TestHomebrewStableChannelValidation_NativeReceiptAndFailClosedContract(t *t
 	}
 	if got := strings.Count(content, "ruby test/homebrew_stable_channel_test.rb"); got != 3 {
 		t.Errorf("each native job must run the formula contract; got %d executions, want 3", got)
+	}
+	if got := strings.Count(content, "local/pr-candidate/dbootstrap"); got != 9 {
+		t.Errorf("each native job must stage and use the qualified local tap formula for audit, style, and install; got %d references, want 9", got)
+	}
+	if got := strings.Count(content, "cp Formula/dbootstrap.rb \"$candidate_tap/Formula/dbootstrap.rb\""); got != 3 {
+		t.Errorf("each native job must copy the checked-out formula into its local tap; got %d copies, want 3", got)
 	}
 }
