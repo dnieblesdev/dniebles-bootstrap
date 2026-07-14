@@ -230,6 +230,26 @@ func TestDotfilesInstallerResolvesBaseOnceForDiagnosticMessageAndExecution(t *te
 	}
 }
 
+func TestDotfilesInstallerRetainsFailedBaseDiagnostic(t *testing.T) {
+	resolver := fakeDotfilesBaseResolver("", true, "/home/ada")
+	provider := &LocalDotfilesProvider{Resolver: resolver, Runner: &fakeCommandRunner{}}
+
+	result := NewDotfilesInstaller(provider).Install(context.Background(), planning.PlanStep{Ref: planning.ResourceRef{Kind: planning.ResourceKindDotfile, Name: "bash"}})
+	if result.Status != StepStatusFailed || !errors.Is(result.Err, ErrEmptyDotfilesBase) {
+		t.Fatalf("result = %#v, want failed empty-base result", result)
+	}
+	if result.BaseDiagnostic == nil {
+		t.Fatal("BaseDiagnostic = nil, want retained resolution diagnostic")
+	}
+	diagnostic := result.BaseDiagnostic
+	if diagnostic.Source != DotfilesBaseSourceEnv || diagnostic.AttemptedCandidate != "" || diagnostic.CanonicalPath != "" || diagnostic.Cause != ErrEmptyDotfilesBase.Error() {
+		t.Fatalf("diagnostic = %#v, want safe empty-env failure", diagnostic)
+	}
+	if len(diagnostic.Modules) != 1 || diagnostic.Modules[0] != "bash" {
+		t.Fatalf("diagnostic modules = %#v, want [bash]", diagnostic.Modules)
+	}
+}
+
 type fakeDotfilesProvider struct {
 	modules [][]string
 	err     error

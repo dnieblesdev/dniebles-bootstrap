@@ -274,11 +274,45 @@ func TestLocalDotfilesProviderRejectsForgedUnsafeExecutionContext(t *testing.T) 
 	_, err := provider.RunDotlinkReportWithExecutionContext(context.Background(), []string{"bash"}, DotfilesExecutionContext{
 		Base: ResolvedDotfilesBase{CanonicalPath: "/"},
 	})
-	if !errors.Is(err, ErrUnsafeDotfilesBase) {
-		t.Fatalf("RunDotlinkReportWithExecutionContext() error = %v, want unsafe base error", err)
+	if !errors.Is(err, ErrUnresolvedDotfiles) {
+		t.Fatalf("RunDotlinkReportWithExecutionContext() error = %v, want rejected unvalidated base error", err)
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("runner calls = %d, want 0", len(runner.calls))
+	}
+}
+
+func TestLocalDotfilesProviderRejectsExecutionContextsWithoutMatchingValidationProof(t *testing.T) {
+	tests := []struct {
+		name    string
+		context DotfilesExecutionContext
+	}{
+		{
+			name:    "missing proof",
+			context: DotfilesExecutionContext{Base: ResolvedDotfilesBase{CanonicalPath: "/repo"}},
+		},
+		{
+			name: "mismatched proof",
+			context: DotfilesExecutionContext{
+				Base:          ResolvedDotfilesBase{CanonicalPath: "/repo"},
+				validatedBase: "/other",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeCommandRunner{result: CommandResult{Status: CommandStatusSucceeded, Stdout: string(readDotlinkReportFixture(t, "all-changed.json"))}}
+			provider := newFakeLocalProvider("/repo", runner)
+
+			_, err := provider.RunDotlinkReportWithExecutionContext(context.Background(), []string{"bash"}, tt.context)
+			if err == nil {
+				t.Fatal("RunDotlinkReportWithExecutionContext() error = nil, want rejected context")
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("runner calls = %d, want 0", len(runner.calls))
+			}
+		})
 	}
 }
 
