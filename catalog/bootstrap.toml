@@ -1,5 +1,6 @@
 schema = "dniebles.catalog"
 version = 1
+default_profile = "dev"
 
 [[tools]]
 id = "git"

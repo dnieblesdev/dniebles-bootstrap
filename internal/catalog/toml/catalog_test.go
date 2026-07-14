@@ -125,6 +125,38 @@ description = "Bash dotfiles"
 	}
 }
 
+func TestDecodeOptionalDefaultProfile(t *testing.T) {
+	tests := []struct {
+		name        string
+		defaultLine string
+		wantDefault string
+	}{
+		{name: "missing default remains empty"},
+		{name: "blank default is preserved", defaultLine: `default_profile = ""`, wantDefault: ""},
+		{name: "unknown default is preserved", defaultLine: `default_profile = "ops"`, wantDefault: "ops"},
+		{name: "declared default is mapped", defaultLine: `default_profile = "dev"`, wantDefault: "dev"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			catalog, err := Decode(strings.NewReader(fmt.Sprintf(`
+schema = "dniebles.catalog"
+version = 1
+%s
+
+[[profiles]]
+id = "dev"
+`, tt.defaultLine)))
+			if err != nil {
+				t.Fatalf("Decode() error = %v", err)
+			}
+			if catalog.DefaultProfile != tt.wantDefault {
+				t.Fatalf("DefaultProfile = %q, want %q", catalog.DefaultProfile, tt.wantDefault)
+			}
+		})
+	}
+}
+
 func TestDecodeValidationErrors(t *testing.T) {
 	tests := []struct {
 		name    string

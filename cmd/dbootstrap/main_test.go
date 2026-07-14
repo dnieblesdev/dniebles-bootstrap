@@ -502,6 +502,7 @@ func TestRunUsageErrors(t *testing.T) {
 				"  apply   Execute safely; --yes may run eligible brew-backed installs, eligible Linux APT installs, and selected dotfiles\n" +
 				"          APT uses apt-get directly with --yes, or sudo apt-get only with --yes --sudo\n" +
 				"  bootstrap  Execute an explicit selection through the safe apply workflow\n" +
+				"  setup      Execute the catalog default profile through the safe apply workflow\n" +
 				"error: command is required\n",
 		},
 		{
@@ -514,6 +515,7 @@ func TestRunUsageErrors(t *testing.T) {
 				"  apply   Execute safely; --yes may run eligible brew-backed installs, eligible Linux APT installs, and selected dotfiles\n" +
 				"          APT uses apt-get directly with --yes, or sudo apt-get only with --yes --sudo\n" +
 				"  bootstrap  Execute an explicit selection through the safe apply workflow\n" +
+				"  setup      Execute the catalog default profile through the safe apply workflow\n" +
 				"error: unknown command \"deploy\"\n",
 		},
 	}
@@ -3146,4 +3148,231 @@ os = ["linux"]
 id = "linux-only"
 resources = ["package:linux-only"]
 `)
+}
+
+func TestParseSetupFlags(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantMode applyMode
+		wantOK   bool
+	}{
+		{name: "preview accepts catalog", args: []string{"--catalog", "catalog.toml"}, wantMode: applyModeDefaultNonMutating, wantOK: true},
+		{name: "confirmed sudo is allowed", args: []string{"--yes", "--sudo"}, wantMode: applyModeConfirmedSudo, wantOK: true},
+		{name: "profile selector is rejected", args: []string{"--profile", "dev"}},
+		{name: "resource selector is rejected", args: []string{"--resource", "tool:git"}},
+		{name: "positional is rejected", args: []string{"dev"}},
+		{name: "trailing argument is rejected", args: []string{"--", "dev"}},
+		{name: "yes dry run is rejected", args: []string{"--yes", "--dry-run"}},
+		{name: "sudo without yes is rejected", args: []string{"--sudo"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			_, mode, ok := parseSetupFlags(tt.args, &stderr)
+			if ok != tt.wantOK {
+				t.Fatalf("parseSetupFlags() ok = %t, want %t; stderr=%q", ok, tt.wantOK, stderr.String())
+			}
+			if ok && mode != tt.wantMode {
+				t.Fatalf("parseSetupFlags() mode = %q, want %q", mode, tt.wantMode)
+			}
+		})
+	}
+}
+
+func TestResolveDefaultProfile(t *testing.T) {
+	tests := []struct {
+		name           string
+		defaultProfile string
+		profiles       map[string]planning.Profile
+		want           planning.PlanRequest
+		wantErr        string
+	}{
+		{name: "declared default", defaultProfile: "dev", profiles: map[string]planning.Profile{"dev": {Name: "dev"}}, want: planning.PlanRequest{Profile: "dev"}},
+		{name: "surrounding whitespace is normalized", defaultProfile: " dev ", profiles: map[string]planning.Profile{"dev": {Name: "dev"}}, want: planning.PlanRequest{Profile: "dev"}},
+		{name: "absent default", profiles: map[string]planning.Profile{"dev": {Name: "dev"}}, wantErr: "default profile"},
+		{name: "whitespace default", defaultProfile: "  ", profiles: map[string]planning.Profile{"dev": {Name: "dev"}}, wantErr: "default profile"},
+		{name: "unknown default", defaultProfile: "ops", profiles: map[string]planning.Profile{"dev": {Name: "dev"}}, wantErr: "unknown default profile"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request, err := resolveDefaultProfile(planning.Catalog{DefaultProfile: tt.defaultProfile, Profiles: tt.profiles})
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("resolveDefaultProfile() error = %v, want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveDefaultProfile() error = %v", err)
+			}
+			if !reflect.DeepEqual(request, tt.want) {
+				t.Fatalf("resolveDefaultProfile() = %#v, want %#v", request, tt.want)
+			}
+		})
+	}
+}
+
+func TestSetupRejectsInvalidSyntaxBeforeCatalogLoad(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "selector", args: []string{"--profile", "dev"}},
+		{name: "trailing argument", args: []string{"--", "dev"}},
+		{name: "safety conflict", args: []string{"--yes", "--dry-run"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := run(append([]string{"setup", "--catalog", "missing.toml"}, tt.args...), &stdout, &stderr)
+			if code != exitUsage {
+				t.Fatalf("run() exit code = %d, want %d; stderr=%q", code, exitUsage, stderr.String())
+			}
+			if strings.Contains(stderr.String(), "load catalog") {
+				t.Fatalf("run() loaded catalog for invalid setup syntax: %q", stderr.String())
+			}
+		})
+	}
+}
+
+func TestSetupValidatesDefaultBeforeDetectors(t *testing.T) {
+	tests := []struct {
+		name        string
+		defaultLine string
+		wantErr     string
+	}{
+		{name: "absent", wantErr: "default profile is required"},
+		{name: "whitespace", defaultLine: `default_profile = "  "`, wantErr: "default profile is required"},
+		{name: "unknown", defaultLine: `default_profile = "ops"`, wantErr: `unknown default profile "ops"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			catalogPath := writeFile(t, t.TempDir(), "catalog.toml", fmt.Sprintf("schema = \"dniebles.catalog\"\nversion = 1\n%s\n\n[[profiles]]\nid = \"dev\"\n", tt.defaultLine))
+			stubNoSetupDetectors(t)
+			var stdout, stderr bytes.Buffer
+			code := run([]string{"setup", "--catalog", catalogPath}, &stdout, &stderr)
+			if code != exitFailure {
+				t.Fatalf("run() exit code = %d, want %d; stderr=%q", code, exitFailure, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tt.wantErr) {
+				t.Fatalf("stderr = %q, want substring %q", stderr.String(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSetupMatchesExplicitApplyAndKeepsExplicitSelectorsIndependent(t *testing.T) {
+	for _, defaultLine := range []string{`default_profile = " dev "`, `default_profile = "ops"`} {
+		t.Run(defaultLine, func(t *testing.T) {
+			catalogPath := writeFile(t, t.TempDir(), "catalog.toml", fmt.Sprintf("schema = \"dniebles.catalog\"\nversion = 1\n%s\n\n[[profiles]]\nid = \"dev\"\n", defaultLine))
+			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux"})
+			stubInstallationState(t, planning.InstallationState{})
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+
+			var setupOut, setupErr, applyOut, applyErr bytes.Buffer
+			setupCode := run([]string{"setup", "--catalog", catalogPath}, &setupOut, &setupErr)
+			applyCode := run([]string{"apply", "--profile", "dev", "--catalog", catalogPath}, &applyOut, &applyErr)
+			if defaultLine == `default_profile = "ops"` {
+				if setupCode != exitFailure || !strings.Contains(setupErr.String(), "unknown default profile") {
+					t.Fatalf("setup result = (%d, %q), want unknown-default failure", setupCode, setupErr.String())
+				}
+			} else if setupCode != applyCode || setupOut.String() != applyOut.String() || setupErr.String() != applyErr.String() {
+				t.Fatalf("setup = (%d, %q, %q), apply = (%d, %q, %q)", setupCode, setupOut.String(), setupErr.String(), applyCode, applyOut.String(), applyErr.String())
+			}
+			if applyCode != exitSuccess {
+				t.Fatalf("apply exit code = %d, want %d; stderr=%q", applyCode, exitSuccess, applyErr.String())
+			}
+		})
+	}
+}
+
+func TestSetupConfirmedModesAndExplicitPlanRemainSafe(t *testing.T) {
+	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `schema = "dniebles.catalog"
+version = 1
+default_profile = "dev"
+
+[[profiles]]
+id = "dev"
+`)
+	stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux"})
+	stubInstallationState(t, planning.InstallationState{})
+	stubConfigState(t, planning.ConfigState{})
+	stubDotfilesState(t, planning.InstallationState{})
+
+	for _, args := range [][]string{
+		{"setup", "--catalog", catalogPath, "--yes"},
+		{"setup", "--catalog", catalogPath, "--yes", "--sudo"},
+		{"plan", "--profile", "dev", "--catalog", catalogPath},
+		{"apply", "--profile", "dev", "--catalog", catalogPath},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != exitSuccess {
+			t.Fatalf("run(%q) exit code = %d, want %d; stderr=%q", args, code, exitSuccess, stderr.String())
+		}
+	}
+
+	for _, command := range []string{"plan", "apply"} {
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{command, "--catalog", catalogPath}, &stdout, &stderr); code != exitUsage {
+			t.Fatalf("run(%q) exit code = %d, want %d", command, code, exitUsage)
+		}
+		if !strings.Contains(stderr.String(), "--profile or --resource is required") {
+			t.Fatalf("run(%q) stderr = %q, want existing missing-target error", command, stderr.String())
+		}
+	}
+}
+
+func TestExplicitSelectorsIgnoreAbsentOrInvalidDefault(t *testing.T) {
+	for _, defaultLine := range []string{"", `default_profile = "ops"`} {
+		t.Run(fmt.Sprintf("default %q", defaultLine), func(t *testing.T) {
+			catalogPath := writeFile(t, t.TempDir(), "catalog.toml", fmt.Sprintf("schema = \"dniebles.catalog\"\nversion = 1\n%s\n\n[[profiles]]\nid = \"dev\"\n", defaultLine))
+			stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux"})
+			stubInstallationState(t, planning.InstallationState{})
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+
+			for _, command := range []string{"plan", "apply"} {
+				var stdout, stderr bytes.Buffer
+				if code := run([]string{command, "--profile", "dev", "--catalog", catalogPath}, &stdout, &stderr); code != exitSuccess {
+					t.Fatalf("run(%q) exit code = %d, want %d; stderr=%q", command, code, exitSuccess, stderr.String())
+				}
+			}
+		})
+	}
+}
+
+func stubNoSetupDetectors(t *testing.T) {
+	t.Helper()
+	originalEnvironment := detectEnvironmentFacts
+	originalInstallation := detectInstallationState
+	originalConfig := detectConfigState
+	originalDotfiles := detectDotfilesState
+	detectEnvironmentFacts = func() planning.EnvironmentFacts {
+		t.Fatal("environment detector must not run")
+		return planning.EnvironmentFacts{}
+	}
+	detectInstallationState = func(planning.Catalog) planning.InstallationState {
+		t.Fatal("installation detector must not run")
+		return planning.InstallationState{}
+	}
+	detectConfigState = func(planning.Catalog) planning.ConfigState {
+		t.Fatal("config detector must not run")
+		return planning.ConfigState{}
+	}
+	detectDotfilesState = func(planning.Catalog) planning.InstallationState {
+		t.Fatal("dotfiles detector must not run")
+		return planning.InstallationState{}
+	}
+	t.Cleanup(func() {
+		detectEnvironmentFacts = originalEnvironment
+		detectInstallationState = originalInstallation
+		detectConfigState = originalConfig
+		detectDotfilesState = originalDotfiles
+	})
 }

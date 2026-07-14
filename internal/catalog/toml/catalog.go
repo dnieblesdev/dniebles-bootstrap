@@ -35,9 +35,10 @@ func Decode(r io.Reader) (planning.Catalog, error) {
 
 func mapCatalog(raw catalogFile) planning.Catalog {
 	catalog := planning.Catalog{
-		Profiles:  make(map[string]planning.Profile, len(raw.Profiles)),
-		Bundles:   make(map[string]planning.Bundle, len(raw.Bundles)),
-		Resources: make(map[planning.ResourceRef]planning.Resource, len(raw.Tools)+len(raw.Runtimes)+len(raw.Packages)+len(raw.Dotfiles)),
+		DefaultProfile: raw.DefaultProfile,
+		Profiles:       make(map[string]planning.Profile, len(raw.Profiles)),
+		Bundles:        make(map[string]planning.Bundle, len(raw.Bundles)),
+		Resources:      make(map[planning.ResourceRef]planning.Resource, len(raw.Tools)+len(raw.Runtimes)+len(raw.Packages)+len(raw.Dotfiles)),
 	}
 
 	for _, entry := range raw.Profiles {

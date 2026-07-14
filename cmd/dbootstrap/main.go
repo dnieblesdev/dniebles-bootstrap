@@ -161,6 +161,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runApply(args[1:], stdout, stderr)
 	case "bootstrap":
 		return runApplyLike("bootstrap", args[1:], stdout, stderr)
+	case "setup":
+		return runSetup(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		printUsage(stdout)
 		return exitSuccess
@@ -195,6 +197,30 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 	return runApplyLike("apply", args, stdout, stderr)
 }
 
+func runSetup(args []string, stdout, stderr io.Writer) int {
+	if isHelpRequest(args) {
+		printSetupUsage(stdout)
+		return exitSuccess
+	}
+
+	catalogPath, mode, ok := parseSetupFlags(args, stderr)
+	if !ok {
+		return exitUsage
+	}
+
+	catalog, err := catalogtoml.LoadFile(catalogPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: load catalog %q: %v\n", catalogPath, err)
+		return exitFailure
+	}
+	request, err := resolveDefaultProfile(catalog)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return exitFailure
+	}
+	return runApplyLikeCatalog("setup", catalog, catalogPath, request, mode, stdout, stderr)
+}
+
 func runApplyLike(command string, args []string, stdout, stderr io.Writer) int {
 	if command == "bootstrap" && isHelpRequest(args) {
 		printApplyLikeUsage(command, stdout)
@@ -206,11 +232,16 @@ func runApplyLike(command string, args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	result, facts, err := buildPlan(catalogPath, request)
+	catalog, err := catalogtoml.LoadFile(catalogPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: load catalog %q: %v\n", catalogPath, err)
 		return exitFailure
 	}
+	return runApplyLikeCatalog(command, catalog, catalogPath, request, mode, stdout, stderr)
+}
+
+func runApplyLikeCatalog(command string, catalog planning.Catalog, catalogPath string, request planning.PlanRequest, mode applyMode, stdout, stderr io.Writer) int {
+	result, facts := buildPlanFromCatalog(catalog, request)
 
 	if hasPlanningError(result) {
 		renderPlanResult(stdout, request.Profile, request.Resources, catalogPath, facts, result)
@@ -520,6 +551,50 @@ func parseApplyLikeFlags(command string, args []string, stderr io.Writer) (plann
 	return planning.PlanRequest{Profile: *profile, Resources: resourceRefs}, *catalogPath, mode, true
 }
 
+func parseSetupFlags(args []string, stderr io.Writer) (string, applyMode, bool) {
+	flags := flag.NewFlagSet("setup", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	catalogPath := flags.String("catalog", "", "catalog TOML file path")
+	dryRun := flags.Bool("dry-run", false, "run in non-mutating dry-run mode")
+	yes := flags.Bool("yes", false, "confirmed mode")
+	sudo := flags.Bool("sudo", false, "use sudo for confirmed APT installation")
+
+	if err := flags.Parse(args); err != nil {
+		printSetupUsage(stderr)
+		return "", "", false
+	}
+	if flags.NArg() > 0 {
+		printSetupUsage(stderr)
+		fmt.Fprintf(stderr, "error: unexpected argument %q\n", flags.Arg(0))
+		return "", "", false
+	}
+	if *dryRun && *yes {
+		printSetupUsage(stderr)
+		fmt.Fprintln(stderr, "error: --dry-run and --yes cannot be combined")
+		return "", "", false
+	}
+	if *sudo && !*yes {
+		printSetupUsage(stderr)
+		fmt.Fprintln(stderr, "error: --sudo requires --yes")
+		return "", "", false
+	}
+
+	mode := applyModeDefaultNonMutating
+	if *dryRun {
+		mode = applyModeDryRun
+	} else if *yes {
+		mode = applyModeConfirmed
+		if *sudo {
+			mode = applyModeConfirmedSudo
+		}
+	}
+	if *catalogPath == "" {
+		*catalogPath = defaultCatalogPath()
+	}
+	return *catalogPath, mode, true
+}
+
 // parsePlanFlags parses the shared target surface used by plan and apply.
 // It validates --profile, repeatable --resource, and --catalog and returns the
 // assembled PlanRequest, catalog path, and a flag indicating success.
@@ -569,7 +644,11 @@ func buildPlan(catalogPath string, request planning.PlanRequest) (planning.PlanR
 	if err != nil {
 		return planning.PlanResult{}, planning.EnvironmentFacts{}, err
 	}
+	result, facts := buildPlanFromCatalog(catalog, request)
+	return result, facts, nil
+}
 
+func buildPlanFromCatalog(catalog planning.Catalog, request planning.PlanRequest) (planning.PlanResult, planning.EnvironmentFacts) {
 	facts := detectEnvironmentFacts()
 	installation := detectInstallationState(catalog)
 	installation = mergeInstallationState(installation, detectDotfilesState(catalog))
@@ -581,7 +660,18 @@ func buildPlan(catalogPath string, request planning.PlanRequest) (planning.PlanR
 		configState,
 		installation,
 	)
-	return result, facts, nil
+	return result, facts
+}
+
+func resolveDefaultProfile(catalog planning.Catalog) (planning.PlanRequest, error) {
+	trimmedName := strings.TrimSpace(catalog.DefaultProfile)
+	if trimmedName == "" {
+		return planning.PlanRequest{}, fmt.Errorf("default profile is required for setup")
+	}
+	if _, ok := catalog.Profiles[trimmedName]; !ok {
+		return planning.PlanRequest{}, fmt.Errorf("unknown default profile %q", trimmedName)
+	}
+	return planning.PlanRequest{Profile: trimmedName}, nil
 }
 
 func hasPlanningError(result planning.PlanResult) bool {
@@ -619,12 +709,15 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  apply   Execute safely; --yes may run eligible brew-backed installs, eligible Linux APT installs, and selected dotfiles")
 	fmt.Fprintln(w, "          APT uses apt-get directly with --yes, or sudo apt-get only with --yes --sudo")
 	fmt.Fprintln(w, "  bootstrap  Execute an explicit selection through the safe apply workflow")
+	fmt.Fprintln(w, "  setup      Execute the catalog default profile through the safe apply workflow")
 }
 
 func printCommandUsage(command string, w io.Writer) {
 	switch command {
 	case "apply", "bootstrap":
 		printApplyLikeUsage(command, w)
+	case "setup":
+		printSetupUsage(w)
 	default:
 		printPlanUsage(w)
 	}
@@ -643,6 +736,10 @@ func printApplyLikeUsage(command string, w io.Writer) {
 	if command == "bootstrap" {
 		fmt.Fprintln(w, "Select at least one --profile or --resource. Default and --dry-run do not mutate; --yes confirms eligible work and --sudo requires --yes.")
 	}
+}
+
+func printSetupUsage(w io.Writer) {
+	fmt.Fprintln(w, "Usage: dbootstrap setup [--catalog <path>] [--dry-run] [--yes [--sudo]]")
 }
 
 func isHelpRequest(args []string) bool {

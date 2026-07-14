@@ -2,9 +2,11 @@ package planning
 
 // Catalog is the decoded, format-agnostic planning input.
 type Catalog struct {
-	Profiles  map[string]Profile
-	Bundles   map[string]Bundle
-	Resources map[ResourceRef]Resource
+	// DefaultProfile is optional metadata for workflows that explicitly select it.
+	DefaultProfile string
+	Profiles       map[string]Profile
+	Bundles        map[string]Bundle
+	Resources      map[ResourceRef]Resource
 }
 
 // Profile describes a named installation scope.

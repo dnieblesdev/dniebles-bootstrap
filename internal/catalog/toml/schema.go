@@ -3,14 +3,15 @@ package toml
 // catalogFile mirrors the repository-local TOML schema. It stays private to the
 // adapter so planning remains format-agnostic.
 type catalogFile struct {
-	Schema   string          `toml:"schema"`
-	Version  int             `toml:"version"`
-	Tools    []resourceEntry `toml:"tools"`
-	Runtimes []resourceEntry `toml:"runtimes"`
-	Packages []resourceEntry `toml:"packages"`
-	Dotfiles []resourceEntry `toml:"dotfiles"`
-	Bundles  []bundleEntry   `toml:"bundles"`
-	Profiles []profileEntry  `toml:"profiles"`
+	Schema         string          `toml:"schema"`
+	Version        int             `toml:"version"`
+	DefaultProfile string          `toml:"default_profile"`
+	Tools          []resourceEntry `toml:"tools"`
+	Runtimes       []resourceEntry `toml:"runtimes"`
+	Packages       []resourceEntry `toml:"packages"`
+	Dotfiles       []resourceEntry `toml:"dotfiles"`
+	Bundles        []bundleEntry   `toml:"bundles"`
+	Profiles       []profileEntry  `toml:"profiles"`
 }
 
 type resourceEntry struct {
