@@ -24,12 +24,14 @@ REPO_NAME="dniebles-bootstrap"
 BINARY_NAME="dbootstrap"
 CATALOG_NAME="bootstrap.toml"
 STATE_NAME="install-state.toml"
+SHELL_STATE_NAME="shell-path-state.toml"
 
 main() {
   local requested_version=""
   local allow_prerelease=false
   local force=false
   local uninstall=false
+  local shell="" shell_file="" shell_count=0 shell_file_count=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -52,6 +54,18 @@ main() {
         uninstall=true
         shift
         ;;
+      --setup-path)
+        shell="${2:-}"
+        shell_count=$((shell_count + 1))
+        [[ -n "$shell" ]] || die "error: --setup-path requires bash or zsh"
+        shift 2
+        ;;
+      --shell-file)
+        shell_file="${2:-}"
+        shell_file_count=$((shell_file_count + 1))
+        [[ -n "$shell_file" ]] || die "error: --shell-file requires an absolute path"
+        shift 2
+        ;;
       -h|--help)
         usage
         exit 0
@@ -67,13 +81,18 @@ main() {
   data_dir="${XDG_DATA_HOME:-${HOME}/.local/share}/dbootstrap"
   catalog_dir="${data_dir}/catalog"
 
-  local binary_path catalog_path state_path
+  local binary_path catalog_path state_path shell_state_path
   binary_path="${bin_dir}/${BINARY_NAME}"
   catalog_path="${catalog_dir}/${CATALOG_NAME}"
   state_path="${data_dir}/${STATE_NAME}"
+  shell_state_path="${data_dir}/${SHELL_STATE_NAME}"
+
+  validate_shell_setup "$shell" "$shell_count" "$shell_file" "$shell_file_count" "$bin_dir"
+  [[ "$uninstall" != true || -z "$shell" ]] || die "error: --uninstall cannot be combined with PATH setup"
+  [[ -z "$shell" ]] || assert_shell_setup_preflight "$shell_file" "$shell_state_path" || die "error: shell PATH ownership is ambiguous; refusing setup"
 
   if [[ "$uninstall" == true ]]; then
-    do_uninstall "$binary_path" "$catalog_path" "$state_path"
+    do_uninstall "$binary_path" "$catalog_path" "$state_path" "$shell_state_path"
     return 0
   fi
 
@@ -141,6 +160,15 @@ main() {
     die "error: installation failed; previous state restored"
   fi
 
+  if [[ -n "$shell" ]]; then
+    if ! setup_shell_path "$shell" "$shell_file" "$bin_dir" "$shell_state_path"; then
+      rollback_transaction "$tx_dir" "$binary_path" "$catalog_path" "$state_path"
+      die "error: PATH setup failed; previous installation and shell state restored"
+    fi
+  fi
+
+  rm -rf "$tx_dir"
+
   if ! directory_on_path "$bin_dir"; then
     echo ""
     echo "Add ${bin_dir} to your PATH, for example:"
@@ -202,6 +230,115 @@ render_shell_path_block() {
     '# <<< dbootstrap managed PATH <<<'
 }
 
+shell_state_value() {
+  awk -F'"' -v key="$2" '$1 == key " = " { print $2; exit }' "$1"
+}
+
+write_shell_state() {
+  local path="$1" shell="$2" target="$3" block="$4"
+  local target64 block64 digest target_toml
+  target64="$(printf '%s' "$target" | base64 -w 0)"
+  block64="$(printf '%s' "$block" | base64 -w 0)"
+  digest="sha256:$(printf '%s' "$block" | sha256sum | awk '{print $1}')"
+  target_toml="${target//\\/\\\\}"
+  target_toml="${target_toml//\"/\\\"}"
+  cat > "$path" <<EOF
+version = 1
+shell = "${shell}"
+startup_file = "${target_toml}"
+startup_file_base64 = "${target64}"
+block_bytes_base64 = "${block64}"
+block_digest = "${digest}"
+EOF
+}
+
+owned_shell_block() {
+  local target="$1" state="$2" expected_target="$3" block target64 block64 digest state_shell
+  [[ -f "$state" && ! -L "$state" && -f "$target" && ! -L "$target" ]] || return 1
+  target64="$(shell_state_value "$state" startup_file_base64)"
+  block64="$(shell_state_value "$state" block_bytes_base64)"
+  digest="$(shell_state_value "$state" block_digest)"
+  state_shell="$(shell_state_value "$state" shell)"
+  [[ -n "$target64" && -n "$block64" && -n "$digest" && ( "$state_shell" == bash || "$state_shell" == zsh ) ]] || return 1
+  [[ "${target##*/}" == ".${state_shell}rc" ]] || return 1
+  [[ "$(printf '%s' "$target64" | base64 -d)" == "$expected_target" ]] || return 1
+  block="$(printf '%s' "$block64" | base64 -d)" || return 1
+  block+=$'\n'
+  [[ "sha256:$(printf '%s' "$block" | sha256sum | awk '{print $1}')" == "$digest" ]] || return 1
+  [[ "$(grep -Fxc '# >>> dbootstrap managed PATH >>>' "$target")" == 1 ]] || return 1
+  [[ "$(grep -Fxc '# <<< dbootstrap managed PATH <<<' "$target")" == 1 ]] || return 1
+  [[ "$(cat "$target")" == *"${block%$'\n'}"* ]]
+}
+
+setup_shell_path() {
+  local shell="$1" target="$2" bin_dir="$3" state="$4" block target_tmp state_tmp before existed=false
+  block="$(render_shell_path_block "$bin_dir")"
+  block+=$'\n'
+  if [[ -e "$state" || -L "$state" ]]; then
+    owned_shell_block "$target" "$state" "$target" || return 1
+    return 0
+  fi
+  [[ ! -L "$target" ]] || return 1
+  [[ ! -e "$target" || -f "$target" ]] || return 1
+  [[ "$(grep -Fxc '# >>> dbootstrap managed PATH >>>' "$target" 2>/dev/null || true)" == 0 ]] || return 1
+  [[ "$(grep -Fxc '# <<< dbootstrap managed PATH <<<' "$target" 2>/dev/null || true)" == 0 ]] || return 1
+  before="$(mktemp "$(dirname "$target")/.dbootstrap-path-backup.XXXXXX")"
+  target_tmp="$(mktemp "$(dirname "$target")/.dbootstrap-path.XXXXXX")"
+  state_tmp="$(mktemp "$(dirname "$state")/.dbootstrap-state.XXXXXX")"
+  if [[ -e "$target" ]]; then
+    existed=true
+    cp -p "$target" "$before"
+  fi
+  [[ ! -e "$target" ]] || cat "$target" > "$target_tmp"
+  [[ ! -s "$target_tmp" ]] || [[ "$(tail -c 1 "$target_tmp"; printf x)" == $'\nx' ]] || printf '\n' >> "$target_tmp"
+  printf '%s\n' "$block" >> "$target_tmp"
+  write_shell_state "$state_tmp" "$shell" "$target" "$block" || return 1
+  mv "$state_tmp" "$state" || return 1
+  if [[ "${INSTALLER_PATH_FAIL_AFTER:-}" == state ]] || ! mv "$target_tmp" "$target"; then
+    [[ "$existed" == true ]] && cp -p "$before" "$target" || rm -f "$target"
+    rm -f "$state" "$target_tmp" "$state_tmp" "$before"
+    return 1
+  fi
+  rm -f "$before"
+}
+
+assert_shell_setup_preflight() {
+  local target="$1" state="$2"
+  if [[ -e "$state" || -L "$state" ]]; then
+    owned_shell_block "$target" "$state" "$target"
+    return
+  fi
+  [[ ! -L "$target" && ( ! -e "$target" || -f "$target" ) ]] || return 1
+  [[ "$(grep -Fxc '# >>> dbootstrap managed PATH >>>' "$target" 2>/dev/null || true)" == 0 ]] || return 1
+  [[ "$(grep -Fxc '# <<< dbootstrap managed PATH <<<' "$target" 2>/dev/null || true)" == 0 ]]
+}
+
+remove_owned_shell_path() {
+  local target="$1" state="$2" block tmp backup
+  owned_shell_block "$target" "$state" "$target" || return 1
+  block="$(printf '%s' "$(shell_state_value "$state" block_bytes_base64)" | base64 -d)"
+  block+=$'\n'
+  tmp="$(mktemp "$(dirname "$target")/.dbootstrap-path.XXXXXX")"
+  backup="$(mktemp "$(dirname "$target")/.dbootstrap-path-backup.XXXXXX")"
+  cp -p "$target" "$backup"
+  python3 - "$target" "$block" "$tmp" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1])
+block = sys.argv[2].encode()
+target = pathlib.Path(sys.argv[3])
+data = source.read_bytes()
+if data.count(block) != 1:
+    raise SystemExit(1)
+target.write_bytes(data.replace(block, b"", 1))
+PY
+  if ! mv "$tmp" "$target" || ! rm -f "$state"; then
+    cp -p "$backup" "$target"
+    rm -f "$tmp" "$backup"
+    return 1
+  fi
+  rm -f "$backup"
+}
+
 # release_asset_url accepts either a GitHub releases/download base or a
 # repository/release root override used by local test fixtures.
 release_asset_url() {
@@ -225,6 +362,8 @@ Options:
   --allow-prerelease     Allow installation of prerelease tags
   --force                Allow reinstall, upgrade, or downgrade
   --uninstall            Remove the managed binary, catalog, and state
+  --setup-path bash|zsh  Add one managed PATH block to an explicit shell file
+  --shell-file PATH      Absolute ~/.bashrc or ~/.zshrc paired with --setup-path
   -h, --help             Show this help message
 USAGE
 }
@@ -414,7 +553,6 @@ commit_transaction() {
   write_state "${state_path}.tmp" "$tag" "$binary_path" "$binary_digest" "$catalog_path" "$catalog_digest" || return 1
   mv "${state_path}.tmp" "$state_path" || return 1
 
-  rm -rf "$tx_dir"
 }
 
 rollback_transaction() {
@@ -639,6 +777,7 @@ do_uninstall() {
   local binary_path="$1"
   local catalog_path="$2"
   local state_path="$3"
+  local shell_state_path="$4"
 
   if [[ ! -f "$state_path" ]]; then
     die "error: no install state found at ${state_path}; refusing to uninstall"
@@ -677,6 +816,12 @@ do_uninstall() {
 
   if [[ ${#modified[@]} -gt 0 ]]; then
     die "error: managed files have been modified: ${modified[*]}; aborting uninstall to preserve your changes"
+  fi
+
+  if [[ -e "$shell_state_path" || -L "$shell_state_path" ]]; then
+    local shell_target
+    shell_target="$(printf '%s' "$(shell_state_value "$shell_state_path" startup_file_base64)" | base64 -d 2>/dev/null || true)"
+    [[ -n "$shell_target" ]] && remove_owned_shell_path "$shell_target" "$shell_state_path" || die "error: shell PATH ownership is ambiguous; refusing to uninstall"
   fi
 
   rm -f "$binary_path" "$catalog_path" "$state_path"
