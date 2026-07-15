@@ -21,7 +21,7 @@ assert_includes(source, "sha256 \"a8f21a55019ff09c08a124f30bffc6831c960be81cbd14
 assert_includes(source, "#{RELEASE_BASE}/dbootstrap_v0.1.0_linux_arm64.tar.gz")
 assert_includes(source, "sha256 \"8732f1e03ba4dc0d1a6132dd74a3291364e615aff8c52bc67727ff3f0999de6e\"")
 assert_includes(source, "bin.install \"dbootstrap\"")
-assert_includes(source, "pkgshare.install \"catalog/bootstrap.toml\"")
+assert_includes(source, "pkgshare.install \"catalog\"")
 assert_includes(source, "disable! date:")
 assert_includes(source, "because: \"dbootstrap supports Linux and WSL only; macOS is unsupported\"")
 assert_includes(source, "test do")

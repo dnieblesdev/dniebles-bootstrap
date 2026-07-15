@@ -19,7 +19,7 @@ class Dbootstrap < Formula
 
   def install
     bin.install "dbootstrap"
-    pkgshare.install "catalog/bootstrap.toml"
+    pkgshare.install "catalog"
   end
 
   test do
