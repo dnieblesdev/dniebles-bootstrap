@@ -7,7 +7,10 @@ import (
 	"testing"
 )
 
-const releasePublishWorkflow = "../../.github/workflows/release-publish.yml"
+const (
+	releaseBuildWorkflow   = "../../.github/workflows/release-build.yml"
+	releasePublishWorkflow = "../../.github/workflows/release-publish.yml"
+)
 
 // extractBlock returns the contiguous indented YAML block that starts with the
 // given header line. It stops when a non-empty line at the same or lower
@@ -36,13 +39,18 @@ func extractBlock(content, header string) string {
 	return ""
 }
 
-func readWorkflow(t *testing.T) string {
+func readWorkflowFile(t *testing.T, path string) string {
 	t.Helper()
-	data, err := os.ReadFile(releasePublishWorkflow)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read %s: %v", releasePublishWorkflow, err)
+		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(data)
+}
+
+func readWorkflow(t *testing.T) string {
+	t.Helper()
+	return readWorkflowFile(t, releasePublishWorkflow)
 }
 
 func TestReleasePublish_GlobalPermissions(t *testing.T) {
@@ -165,5 +173,46 @@ func TestReleasePublish_PublishJobPreservesReleaseBehavior(t *testing.T) {
 	}
 	if !strings.Contains(job, "Create GitHub Release") {
 		t.Errorf("publish job must contain the release creation step")
+	}
+}
+
+func TestReleaseAssets_BuildProducesImmutableVersionedInstallerAndChecksum(t *testing.T) {
+	content := readWorkflowFile(t, releaseBuildWorkflow)
+	upload := extractBlock(content, "  upload:")
+	if !strings.Contains(upload, "    steps:\n      - uses: actions/checkout@v5") {
+		t.Error("release build upload job must retain a valid steps list before packaging the installer")
+	}
+
+	for _, want := range []string{
+		`installer="dbootstrap_install_${SAFE_VERSION}.sh"`,
+		`cp install.sh "artifacts/${installer}"`,
+		`(cd artifacts && sha256sum "${installer}" > "${installer}.sha256")`,
+		`artifacts/dbootstrap_install_${{ needs.version.outputs.safe_version }}.sh`,
+		`artifacts/dbootstrap_install_${{ needs.version.outputs.safe_version }}.sh.sha256`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("release build must contain %q", want)
+		}
+	}
+}
+
+func TestReleaseAssets_PublishUsesExactEightAssetAllowlistAndRejectsDrift(t *testing.T) {
+	content := readWorkflow(t)
+
+	for _, want := range []string{
+		`"dbootstrap_install_${SAFE_VERSION}.sh"`,
+		`"dbootstrap_install_${SAFE_VERSION}.sh.sha256"`,
+		`if [ ! -f "$f" ]; then`,
+		`Expected exactly ${expected_count} files`,
+		`sha256sum --check --strict *.sha256`,
+		`Guard existing tag and release`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("release publish must contain %q", want)
+		}
+	}
+
+	if !strings.Contains(content, `expected_count=8`) {
+		t.Error("release publish must reject missing or extra assets against an eight-asset allowlist")
 	}
 }
