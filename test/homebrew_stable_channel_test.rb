@@ -26,7 +26,7 @@ assert_includes(source, "disable! date:")
 assert_includes(source, "because: \"dbootstrap supports Linux and WSL only; macOS is unsupported\"")
 assert_includes(source, "test do")
 assert_includes(source, "shell_output(\"\#{bin}/dbootstrap --version\")")
-assert_includes(source, "assert_match version.to_s")
+assert_includes(source, "assert_match \"v\#{version}\"")
 abort("formula must not use imperative CPU detection") if source.include?("Hardware::CPU")
 abort("formula must not include placeholders") if source.match?(/latest|prerelease|TODO|<[^>]+>/i)
 

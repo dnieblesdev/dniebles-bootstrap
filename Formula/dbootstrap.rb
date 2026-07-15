@@ -23,6 +23,6 @@ class Dbootstrap < Formula
   end
 
   test do
-    assert_match version.to_s, shell_output("#{bin}/dbootstrap --version")
+    assert_match "v#{version}", shell_output("#{bin}/dbootstrap --version")
   end
 end
