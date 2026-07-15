@@ -152,6 +152,56 @@ main() {
   echo "  catalog: ${catalog_path}"
 }
 
+validate_shell_setup() {
+  local shell="$1"
+  local shell_count="$2"
+  local shell_file="$3"
+  local shell_file_count="$4"
+  local bin_dir="$5"
+
+  if [[ "$shell_count" -gt 1 || "$shell_file_count" -gt 1 ]]; then
+    die "error: --setup-path and --shell-file may each be specified exactly once"
+  fi
+  if [[ -z "$shell" && -z "$shell_file" ]]; then
+    return 0
+  fi
+  if [[ -z "$shell" || -z "$shell_file" ]]; then
+    die "error: --setup-path and --shell-file must be used together"
+  fi
+  if [[ "$shell" != "bash" && "$shell" != "zsh" ]]; then
+    die "error: --setup-path supports only bash or zsh"
+  fi
+  if [[ "$bin_dir" != /* || -z "$bin_dir" || "$bin_dir" == *$'\n'* || "$bin_dir" == *$'\r'* || "$bin_dir" == *$'\t'* || "$bin_dir" == *[[:cntrl:]]* ]]; then
+    die "error: bin directory must be a non-empty absolute path without control characters"
+  fi
+
+  local canonical_home expected_file
+  canonical_home="$(realpath -e -- "$HOME")" || die "error: HOME must be an existing canonical directory"
+  [[ -d "$canonical_home" && ! -L "$HOME" ]] || die "error: HOME must be a non-symlink directory"
+  expected_file="${canonical_home}/.${shell}rc"
+  if [[ "$shell_file" != "$expected_file" ]]; then
+    die "error: --shell-file must be ${expected_file} for ${shell}"
+  fi
+  if [[ -L "$shell_file" || ( -e "$shell_file" && ! -f "$shell_file" ) ]]; then
+    die "error: --shell-file must be absent or a regular non-symlink file"
+  fi
+  [[ -w "$canonical_home" ]] || die "error: shell-file directory is not writable"
+
+}
+
+render_shell_path_block() {
+  local bin_dir="$1"
+  local encoded_bin_dir="${bin_dir//\'/\'\"\'\"\'}"
+  printf '%s\n' \
+    '# >>> dbootstrap managed PATH >>>' \
+    'if [ -n "${PATH:-}" ]; then' \
+    "  export PATH='${encoded_bin_dir}':\"\${PATH:-}\"" \
+    'else' \
+    "  export PATH='${encoded_bin_dir}'" \
+    'fi' \
+    '# <<< dbootstrap managed PATH <<<'
+}
+
 # release_asset_url accepts either a GitHub releases/download base or a
 # repository/release root override used by local test fixtures.
 release_asset_url() {
@@ -666,4 +716,6 @@ directory_on_path() {
   return 1
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

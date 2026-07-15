@@ -521,7 +521,41 @@ EOF
   assert_contains "$(cat "$home/.local/share/dbootstrap/install-state.toml")" "v2.0.0" "state reflects new version after recovery"
 }
 
+# Helpers are sourced directly: this slice proves rendering and validation without wiring installer flags.
+test_path_helpers() {
+  local source home bin_dir target block expected code invalid_bin_dir
+  source="$(realpath "$INSTALLER")"
+  home="$(mktemp -d)"
+  bin_dir="$home/bin space-'\$\`\\path"
+  invalid_bin_dir=$'bad\npath'
+  target="$home/.bashrc"
+  block="$(HOME="$home" bash -c 'source "$1"; render_shell_path_block "$2"' bash "$source" "$bin_dir")"
+  expected="export PATH='${bin_dir//\'/\'\"\'\"\'}':\"\${PATH:-}\""
+  assert_contains "$block" "$expected" "exact rendered PATH line"
+  HOME="$home" bash -c 'source "$1"; validate_shell_setup bash 1 "$2" 1 "$3"' bash "$source" "$target" "$bin_dir"
+  HOME="$home" bash -c 'source "$1"; validate_shell_setup bash 1 "$2" 1 relative/bin' bash "$source" "$target" 2>/dev/null && code=0 || code=$?
+  [[ $code -ne 0 ]] || fail "relative bin directory must be rejected"
+  HOME="$home" bash -c 'source "$1"; validate_shell_setup bash 1 "$2" 1 ""' bash "$source" "$target" 2>/dev/null && code=0 || code=$?
+  [[ $code -ne 0 ]] || fail "empty bin directory must be rejected"
+  HOME="$home" bash -c 'source "$1"; validate_shell_setup fish 1 "$2" 1 "$3"' bash "$source" "$target" "$bin_dir" 2>/dev/null && code=0 || code=$?
+  [[ $code -ne 0 ]] || fail "unsupported shell must be rejected"
+  HOME="$home" bash -c 'source "$1"; validate_shell_setup bash 1 "$2" 1 "$3"' bash "$source" "$target" "$invalid_bin_dir" 2>/dev/null && code=0 || code=$?
+  [[ $code -ne 0 ]] || fail "control-byte bin directory must be rejected"
+  assert_file_missing "$target"
+}
+
 main() {
+  if [[ "${1:-}" == "path-helpers" ]]; then
+    test_installer_exists
+    test_path_helpers
+    if [[ $FAILED -ne 0 ]]; then
+      echo "Some tests failed."
+      exit 1
+    fi
+    echo "All install path helper tests passed."
+    return
+  fi
+
   test_installer_exists
   test_unsupported_platform
   test_supported_install
@@ -540,6 +574,7 @@ main() {
   test_force_does_not_overwrite_unmanaged
   test_transaction_rollback_on_failure
   test_transaction_recovery_on_next_run
+  test_path_helpers
 
   if [[ $FAILED -ne 0 ]]; then
     echo "Some tests failed."
