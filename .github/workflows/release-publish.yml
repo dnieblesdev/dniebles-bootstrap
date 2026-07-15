@@ -71,6 +71,8 @@ jobs:
             "dbootstrap_${SAFE_VERSION}_linux_arm64.tar.gz.sha256"
             "dbootstrap_${SAFE_VERSION}_windows_amd64.zip"
             "dbootstrap_${SAFE_VERSION}_windows_amd64.zip.sha256"
+            "dbootstrap_install_${SAFE_VERSION}.sh"
+            "dbootstrap_install_${SAFE_VERSION}.sh.sha256"
           )
 
           missing=0
@@ -82,7 +84,7 @@ jobs:
           done
 
           actual_count=$(find . -maxdepth 1 -type f | wc -l)
-          expected_count=${#expected[@]}
+          expected_count=8
           if [ "$actual_count" -ne "$expected_count" ]; then
             echo "::error::Expected exactly ${expected_count} files, found ${actual_count}"
             find . -maxdepth 1 -type f -print0 | xargs -0 -I{} echo "::error::Extra file: {}"
@@ -129,4 +131,6 @@ jobs:
             "dbootstrap_${SAFE_VERSION}_linux_arm64.tar.gz" \
             "dbootstrap_${SAFE_VERSION}_linux_arm64.tar.gz.sha256" \
             "dbootstrap_${SAFE_VERSION}_windows_amd64.zip" \
-            "dbootstrap_${SAFE_VERSION}_windows_amd64.zip.sha256"
+            "dbootstrap_${SAFE_VERSION}_windows_amd64.zip.sha256" \
+            "dbootstrap_install_${SAFE_VERSION}.sh" \
+            "dbootstrap_install_${SAFE_VERSION}.sh.sha256"

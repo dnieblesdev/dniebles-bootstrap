@@ -136,16 +136,35 @@ jobs:
     outputs:
       artifact_name: ${{ steps.bundle.outputs.artifact_name }}
     steps:
+      - uses: actions/checkout@v5
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           pattern: dbootstrap-*
           merge-multiple: true
 
+      - name: Package immutable installer asset
+        env:
+          SAFE_VERSION: ${{ needs.version.outputs.safe_version }}
+        run: |
+          set -euo pipefail
+          installer="dbootstrap_install_${SAFE_VERSION}.sh"
+          cp install.sh "artifacts/${installer}"
+          (cd artifacts && sha256sum "${installer}" > "${installer}.sha256")
+
       - uses: actions/upload-artifact@v4
         with:
           name: dbootstrap-artifacts-${{ needs.version.outputs.safe_version }}
-          path: artifacts/*
+          path: |
+            artifacts/dbootstrap_${{ needs.version.outputs.safe_version }}_linux_amd64.tar.gz
+            artifacts/dbootstrap_${{ needs.version.outputs.safe_version }}_linux_amd64.tar.gz.sha256
+            artifacts/dbootstrap_${{ needs.version.outputs.safe_version }}_linux_arm64.tar.gz
+            artifacts/dbootstrap_${{ needs.version.outputs.safe_version }}_linux_arm64.tar.gz.sha256
+            artifacts/dbootstrap_${{ needs.version.outputs.safe_version }}_windows_amd64.zip
+            artifacts/dbootstrap_${{ needs.version.outputs.safe_version }}_windows_amd64.zip.sha256
+            artifacts/dbootstrap_install_${{ needs.version.outputs.safe_version }}.sh
+            artifacts/dbootstrap_install_${{ needs.version.outputs.safe_version }}.sh.sha256
           if-no-files-found: error
 
       - name: Expose consolidated artifact name
