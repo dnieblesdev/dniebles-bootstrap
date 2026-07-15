@@ -38,7 +38,7 @@ func TestHomebrewStableChannelValidation_PRHeadLocalFormulaContract(t *testing.T
 		"brew audit --strict --formula local/pr-candidate/dbootstrap",
 		"brew style local/pr-candidate/dbootstrap",
 		"HOMEBREW_NO_SANDBOX_LINUX=1 HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source local/pr-candidate/dbootstrap",
-		"brew test local/pr-candidate/dbootstrap",
+		"HOMEBREW_NO_SANDBOX_LINUX=1 brew test local/pr-candidate/dbootstrap",
 		"if: always()",
 	} {
 		if !strings.Contains(content, want) {
@@ -107,10 +107,10 @@ func TestHomebrewStableChannelValidation_NativeReceiptAndFailClosedContract(t *t
 	if got := strings.Count(content, "cp Formula/dbootstrap.rb \"$candidate_tap/Formula/dbootstrap.rb\""); got != 3 {
 		t.Errorf("each native job must copy the checked-out formula into its local tap; got %d copies, want 3", got)
 	}
-	if got := strings.Count(content, "brew test local/pr-candidate/dbootstrap"); got != 2 {
-		t.Errorf("each Linux job must run the staged formula test after installation; got %d executions, want 2", got)
+	if got := strings.Count(content, "HOMEBREW_NO_SANDBOX_LINUX=1 brew test local/pr-candidate/dbootstrap"); got != 2 {
+		t.Errorf("each Linux formula test must disable Homebrew's Linux sandbox; got %d executions, want 2", got)
 	}
-	if got := strings.Count(content, "HOMEBREW_NO_SANDBOX_LINUX=1"); got != 2 {
-		t.Errorf("each Linux install must disable Homebrew's Linux sandbox; got %d occurrences, want 2", got)
+	if got := strings.Count(content, "HOMEBREW_NO_SANDBOX_LINUX=1"); got != 4 {
+		t.Errorf("each Linux install and formula test must disable Homebrew's Linux sandbox; got %d occurrences, want 4", got)
 	}
 }
