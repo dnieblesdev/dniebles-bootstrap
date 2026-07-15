@@ -9,12 +9,28 @@ import (
 
 const homebrewStableChannelValidationWorkflow = "../../.github/workflows/homebrew-formula-pr-validation.yml"
 
+const (
+	homebrewTapMainSmokeWorkflow = "../../.github/workflows/homebrew-tap-main-smoke.yml"
+	homebrewStableChannelReadme   = "../../README.md"
+	homebrewStableChannelDocs     = "../../docs/homebrew-stable-channel.md"
+)
+
 func readHomebrewStableChannelValidationWorkflow(t *testing.T) string {
 	t.Helper()
 
 	data, err := os.ReadFile(homebrewStableChannelValidationWorkflow)
 	if err != nil {
 		t.Fatalf("read %s: %v", homebrewStableChannelValidationWorkflow, err)
+	}
+	return string(data)
+}
+
+func readHomebrewStableChannelFile(t *testing.T, path string) string {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(data)
 }
@@ -112,5 +128,67 @@ func TestHomebrewStableChannelValidation_NativeReceiptAndFailClosedContract(t *t
 	}
 	if got := strings.Count(content, "HOMEBREW_NO_SANDBOX_LINUX=1"); got != 4 {
 		t.Errorf("each Linux install and formula test must disable Homebrew's Linux sandbox; got %d occurrences, want 4", got)
+	}
+}
+
+func TestHomebrewStableChannelValidation_MainSmokeAndOperatorDocsContract(t *testing.T) {
+	workflow := readHomebrewStableChannelFile(t, homebrewTapMainSmokeWorkflow)
+
+	for _, want := range []string{
+		"push:\n    branches: [main]",
+		"permissions:\n  contents: read",
+		"ref: ${{ github.sha }}",
+		"persist-credentials: false",
+		"brew tap dnieblesdev/dniebles-bootstrap https://github.com/dnieblesdev/dniebles-bootstrap.git",
+		"git -C \"$(brew --repository dnieblesdev/dniebles-bootstrap)\" fetch --depth=1 origin \"$GITHUB_SHA\"",
+		"git -C \"$(brew --repository dnieblesdev/dniebles-bootstrap)\" checkout --detach FETCH_HEAD",
+		"HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source dnieblesdev/dniebles-bootstrap/dbootstrap",
+		"dbootstrap --version",
+		"$(brew --prefix)/share/dbootstrap/catalog/bootstrap.toml",
+		"brew uninstall dbootstrap",
+		"actions/upload-artifact@",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Errorf("main smoke workflow must contain %q", want)
+		}
+	}
+
+	for _, forbidden := range []string{
+		"pull_request:", "workflow_dispatch:", "workflow_call:", "contents: write", "GITHUB_TOKEN",
+		"secrets.", "gh release", "release-publish.yml", "git tag", "git push", "upload-release-asset",
+		"homebrew-dniebles-bootstrap",
+	} {
+		if strings.Contains(strings.ToLower(workflow), strings.ToLower(forbidden)) {
+			t.Errorf("main smoke workflow must not contain %q", forbidden)
+		}
+	}
+
+	for _, path := range []string{homebrewStableChannelReadme, homebrewStableChannelDocs} {
+		content := readHomebrewStableChannelFile(t, path)
+		for _, want := range []string{
+			"brew tap dnieblesdev/dniebles-bootstrap https://github.com/dnieblesdev/dniebles-bootstrap.git",
+			"dnieblesdev/dniebles-bootstrap/dbootstrap",
+			"Linux/WSL", "amd64", "arm64", "macOS", "v0.1.0",
+		} {
+			if !strings.Contains(content, want) {
+				t.Errorf("%s must contain %q", path, want)
+			}
+		}
+		if strings.Contains(strings.ToLower(content), "homebrew-dniebles-bootstrap") {
+			t.Errorf("%s must not require a standalone tap", path)
+		}
+	}
+
+	docs := readHomebrewStableChannelFile(t, homebrewStableChannelDocs)
+	for _, want := range []string{
+		"a8f21a55019ff09c08a124f30bffc6831c960be81cbd1496e43b26c92784d109",
+		"8732f1e03ba4dc0d1a6132dd74a3291364e615aff8c52bc67727ff3f0999de6e",
+		"share/dbootstrap/catalog/bootstrap.toml",
+		"HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source ./Formula/dbootstrap.rb",
+		"rollback",
+	} {
+		if !strings.Contains(docs, want) {
+			t.Errorf("detailed operator docs must contain %q", want)
+		}
 	}
 }

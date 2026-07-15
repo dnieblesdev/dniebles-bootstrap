@@ -202,6 +202,17 @@ Once installed, `dbootstrap` reads the installed catalog at the managed path by 
 - The installer does not edit shell startup files.
 - The installer does not adopt or remove existing unmarked installations.
 
+## Homebrew stable channel (Linux/WSL)
+
+Use the primary repository's custom-URL tap on Linux/WSL `amd64` or `arm64`:
+
+```bash
+brew tap dnieblesdev/dniebles-bootstrap https://github.com/dnieblesdev/dniebles-bootstrap.git
+brew install dnieblesdev/dniebles-bootstrap/dbootstrap
+```
+
+The formula is pinned to public stable `v0.1.0`, installs the catalog at `$(brew --prefix)/share/dbootstrap/catalog/bootstrap.toml`, and is intentionally unavailable on macOS. Pull requests validate the local formula first; the merged `main` formula is then smoke-tested on a GitHub-hosted Linux runner through the exact custom-URL tap. No standalone tap is required. See [Homebrew stable channel details](docs/homebrew-stable-channel.md) for pins, receipts, lifecycle, and rollback.
+
 ## Architecture direction
 
 Future implementation should preserve these layers:

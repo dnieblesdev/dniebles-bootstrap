@@ -1,0 +1,55 @@
+name: Homebrew tap main smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Formula/dbootstrap.rb
+      - .github/workflows/homebrew-tap-main-smoke.yml
+
+permissions:
+  contents: read
+
+jobs:
+  linux-amd64-public-tap:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install Homebrew
+        run: |
+          if ! command -v brew >/dev/null; then
+            NONINTERACTIVE=1 HOMEBREW_INSTALL_FROM_API=0 /bin/bash -c "$(curl --fail --location --silent --show-error https://raw.githubusercontent.com/Homebrew/install/c7952e40b7957268f61643152f4db725379b292e/install.sh)"
+          fi
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew --version
+      - name: Tap and install the merged formula
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          export HOMEBREW_CACHE="$RUNNER_TEMP/homebrew-empty-cache"
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          export HOMEBREW_NO_SANDBOX_LINUX=1
+          mkdir -p "$HOMEBREW_CACHE" homebrew-tap-receipt
+          brew tap dnieblesdev/dniebles-bootstrap https://github.com/dnieblesdev/dniebles-bootstrap.git
+          git -C "$(brew --repository dnieblesdev/dniebles-bootstrap)" fetch --depth=1 origin "$GITHUB_SHA"
+          git -C "$(brew --repository dnieblesdev/dniebles-bootstrap)" checkout --detach FETCH_HEAD
+          HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source dnieblesdev/dniebles-bootstrap/dbootstrap
+          dbootstrap --version | tee homebrew-tap-receipt/version.txt
+          test -f "$(brew --prefix)/share/dbootstrap/catalog/bootstrap.toml"
+          brew --repository dnieblesdev/dniebles-bootstrap > homebrew-tap-receipt/tap-repository.txt
+          brew uninstall dbootstrap
+          brew untap dnieblesdev/dniebles-bootstrap
+      - name: Write public smoke receipt
+        if: always()
+        run: |
+          mkdir -p homebrew-tap-receipt
+          uname -a > homebrew-tap-receipt/system.txt
+          printf '%s\n' '${{ github.sha }}' > homebrew-tap-receipt/triggering-sha.txt
+      - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808
+        if: always()
+        with:
+          name: homebrew-tap-main-smoke-linux-amd64
+          path: homebrew-tap-receipt
+          if-no-files-found: error
