@@ -544,6 +544,108 @@ test_path_helpers() {
   assert_file_missing "$target"
 }
 
+# RED: explicit PATH setup must own exactly one shell block and a separate state file.
+test_path_setup_creates_owned_state() {
+  local fixtures home target state out code block
+  fixtures="$(mktemp -d)"
+  home="$(mktemp -d)"
+  make_home "$home"
+  setup_fixtures "$fixtures" "v1.2.3"
+  target="$home/.bashrc"
+  printf '# user setting\n' > "$target"
+
+  out="$(HOME="$home" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --setup-path bash --shell-file "$target" 2>&1)" && code=0 || code=$?
+  if [[ $code -ne 0 ]]; then
+    fail "explicit PATH setup should succeed; output: $out"
+    return
+  fi
+  state="$home/.local/share/dbootstrap/shell-path-state.toml"
+  assert_file_exists "$state"
+  block="$(HOME="$home" bash -c 'source "$1"; render_shell_path_block "$2"' bash "$(realpath "$INSTALLER")" "$home/.local/bin")"
+  assert_contains "$(cat "$target")" "$block" "owned shell block"
+  assert_contains "$(cat "$state")" "startup_file = \"$target\"" "shell state target"
+  assert_eq "$(awk -F'"' '$1 == "startup_file_base64 = " { print $2; exit }' "$state" | base64 -d)" "$target" "shell state target"
+
+  out="$(HOME="$home" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --force --setup-path bash --shell-file "$target" 2>&1)" && code=0 || code=$?
+  if [[ $code -ne 0 ]]; then
+    fail "repeat PATH setup should be idempotent; output: $out"
+  fi
+  assert_eq "$(grep -Fxc '# >>> dbootstrap managed PATH >>>' "$target")" "1" "managed marker count"
+  assert_eq "$(env PATH='' /bin/bash -c 'source "$1"; printf %s "$PATH"' bash "$target")" "$home/.local/bin" "empty inherited PATH has no trailing entry"
+}
+
+# RED: failures and ambiguity never mutate user startup content; owned uninstall is reversible.
+test_path_setup_safety_and_uninstall() {
+  local fixtures home target state before out code
+  fixtures="$(mktemp -d)"; home="$(mktemp -d)"
+  make_home "$home"; setup_fixtures "$fixtures" "v1.2.3"
+  target="$home/.zshrc"; state="$home/.local/share/dbootstrap/shell-path-state.toml"
+  printf 'keep-me\n' > "$target"; before="$(cat "$target")"
+  out="$(HOME="$home" INSTALLER_PATH_FAIL_AFTER=state INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --setup-path zsh --shell-file "$target" 2>&1)" && code=0 || code=$?
+  [[ $code -ne 0 ]] || fail "injected state-first failure must fail"
+  assert_eq "$(cat "$target")" "$before" "startup rollback after state failure"
+  assert_file_missing "$state"
+  assert_file_missing "$home/.local/bin/dbootstrap"
+  assert_file_missing "$home/.local/share/dbootstrap/catalog/bootstrap.toml"
+  assert_file_missing "$home/.local/share/dbootstrap/install-state.toml"
+
+  printf '# >>> dbootstrap managed PATH >>>\nforeign\n# <<< dbootstrap managed PATH <<<\n' > "$target"
+  before="$(cat "$target")"
+  out="$(HOME="$home" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --setup-path zsh --shell-file "$target" 2>&1)" && code=0 || code=$?
+  [[ $code -ne 0 ]] || fail "foreign marker must refuse before install"
+  assert_eq "$(cat "$target")" "$before" "foreign marker preserved"
+  printf 'keep-me\n' > "$target"
+  mv "$target" "$home/actual-zshrc"; ln -s "$home/actual-zshrc" "$target"
+  out="$(HOME="$home" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --force --setup-path zsh --shell-file "$target" 2>&1)" && code=0 || code=$?
+  [[ $code -ne 0 ]] || fail "symlink target must refuse setup"
+  [[ -L "$target" ]] || fail "symlink target must remain a symlink"
+  rm "$target"; mv "$home/actual-zshrc" "$target"
+
+  out="$(HOME="$home" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --force --setup-path zsh --shell-file "$target" 2>&1)" && code=0 || code=$?
+  [[ $code -eq 0 ]] || fail "zsh setup after rollback should succeed: $out"
+  python3 - "$target" <<'PY'
+from pathlib import Path
+path = Path(__import__('sys').argv[1])
+path.write_text(path.read_text().replace('export PATH=', '# modified\nexport PATH=', 1))
+PY
+  before="$(cat "$target")"
+  out="$(HOME="$home" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --force --setup-path zsh --shell-file "$target" 2>&1)" && code=0 || code=$?
+  [[ $code -ne 0 ]] || fail "modified owned block must refuse setup"
+  assert_eq "$(cat "$target")" "$before" "modified startup preserved"
+  out="$(HOME="$home" "$INSTALLER" --uninstall 2>&1)" && code=0 || code=$?
+  [[ $code -ne 0 ]] || fail "modified owned block must refuse uninstall"
+  assert_file_exists "$state"
+
+  # A fresh owned setup removes only its block and state during uninstall.
+  home="$(mktemp -d)"; make_home "$home"; target="$home/.bashrc"
+  printf 'unrelated\n' > "$target"
+  out="$(HOME="$home" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --setup-path bash --shell-file "$target" 2>&1)" && code=0 || code=$?
+  [[ $code -eq 0 ]] || fail "bash setup should succeed: $out"
+  out="$(HOME="$home" "$INSTALLER" --uninstall 2>&1)" && code=0 || code=$?
+  [[ $code -eq 0 ]] || fail "owned PATH uninstall should succeed: $out"
+  assert_eq "$(cat "$target")" "unrelated" "unrelated startup content preserved"
+  assert_file_missing "$home/.local/share/dbootstrap/shell-path-state.toml"
+}
+
+# A PATH failure during a forced upgrade restores the previous binary, catalog, and install state.
+test_path_setup_restores_existing_install() {
+  local fixtures home target out code old_binary old_catalog old_state
+  fixtures="$(mktemp -d)"; home="$(mktemp -d)"
+  make_home "$home"; setup_fixtures "$fixtures" "v1.2.3"
+  HOME="$home" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" >/dev/null 2>&1
+  old_binary="$(cat "$home/.local/bin/dbootstrap")"
+  old_catalog="$(cat "$home/.local/share/dbootstrap/catalog/bootstrap.toml")"
+  old_state="$(cat "$home/.local/share/dbootstrap/install-state.toml")"
+  setup_fixtures "$fixtures" "v2.0.0"
+  target="$home/.bashrc"
+
+  out="$(HOME="$home" INSTALLER_PATH_FAIL_AFTER=state INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --force --version v2.0.0 --setup-path bash --shell-file "$target" 2>&1)" && code=0 || code=$?
+  [[ $code -ne 0 ]] || fail "PATH failure during forced upgrade must fail"
+  assert_eq "$(cat "$home/.local/bin/dbootstrap")" "$old_binary" "binary restored after PATH failure"
+  assert_eq "$(cat "$home/.local/share/dbootstrap/catalog/bootstrap.toml")" "$old_catalog" "catalog restored after PATH failure"
+  assert_eq "$(cat "$home/.local/share/dbootstrap/install-state.toml")" "$old_state" "install state restored after PATH failure"
+}
+
 main() {
   if [[ "${1:-}" == "path-helpers" ]]; then
     test_installer_exists
@@ -553,6 +655,20 @@ main() {
       exit 1
     fi
     echo "All install path helper tests passed."
+    return
+  fi
+
+  if [[ "${1:-}" == "path" ]]; then
+    test_installer_exists
+    test_path_helpers
+    test_path_setup_creates_owned_state
+    test_path_setup_safety_and_uninstall
+    test_path_setup_restores_existing_install
+    if [[ $FAILED -ne 0 ]]; then
+      echo "Some tests failed."
+      exit 1
+    fi
+    echo "All install path tests passed."
     return
   fi
 
