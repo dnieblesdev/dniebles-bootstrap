@@ -50,7 +50,7 @@ jobs:
           mkdir -p "$HOMEBREW_CACHE"
           brew audit --strict --formula local/pr-candidate/dbootstrap
           brew style local/pr-candidate/dbootstrap
-          HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source local/pr-candidate/dbootstrap
+          HOMEBREW_NO_SANDBOX_LINUX=1 HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source local/pr-candidate/dbootstrap
           brew test local/pr-candidate/dbootstrap
           dbootstrap --version
           test -f "$(brew --prefix)/share/dbootstrap/catalog/bootstrap.toml"
@@ -105,7 +105,7 @@ jobs:
           mkdir -p "$HOMEBREW_CACHE"
           brew audit --strict --formula local/pr-candidate/dbootstrap
           brew style local/pr-candidate/dbootstrap
-          HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source local/pr-candidate/dbootstrap
+          HOMEBREW_NO_SANDBOX_LINUX=1 HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source local/pr-candidate/dbootstrap
           brew test local/pr-candidate/dbootstrap
           dbootstrap --version
           test -f "$(brew --prefix)/share/dbootstrap/catalog/bootstrap.toml"
