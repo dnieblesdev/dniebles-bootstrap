@@ -118,60 +118,39 @@ After `dbootstrap` starts, the Go application owns catalog resolution, dotfiles 
 | Binary | `${XDG_BIN_HOME:-$HOME/.local/bin}/dbootstrap` | `XDG_BIN_HOME` |
 | Catalog | `${XDG_DATA_HOME:-$HOME/.local/share}/dbootstrap/catalog/bootstrap.toml` | `XDG_DATA_HOME` or `--catalog` |
 | Install state | `${XDG_DATA_HOME:-$HOME/.local/share}/dbootstrap/install-state.toml` | `XDG_DATA_HOME` |
+| PATH state | `${XDG_DATA_HOME:-$HOME/.local/share}/dbootstrap/shell-path-state.toml` | `XDG_DATA_HOME` |
 
-### Install from the repository script
+### Install a reviewed release
 
-Review `install.sh`, then run it:
-
-```bash
-./install.sh
-```
-
-To install a specific release:
-
-```bash
-./install.sh --version v1.2.3
-```
-
-To install a prerelease:
-
-```bash
-./install.sh --version v1.3.0-rc.1 --allow-prerelease
-```
-
-### Manual download, verify, and install
-
-Replace `VERSION`, `OS`, and `ARCH` with the values for your host. `OS` is `linux`; `ARCH` is `amd64` or `arm64`.
+Download the immutable installer and its checksum for one explicit release. Verify the file, inspect it, then run that local file. Do not execute a remote response.
 
 ```bash
 VERSION=v1.2.3
-OS=linux
-ARCH=amd64
-ARCHIVE="dbootstrap_${VERSION}_${OS}_${ARCH}.tar.gz"
 BASE_URL="https://github.com/dnieblesdev/dniebles-bootstrap/releases/download/${VERSION}"
+INSTALLER="dbootstrap_install_${VERSION}.sh"
 
-# Download the archive and its SHA-256 file.
-curl -fsSL -o "${ARCHIVE}" "${BASE_URL}/${ARCHIVE}"
-curl -fsSL -o "${ARCHIVE}.sha256" "${BASE_URL}/${ARCHIVE}.sha256"
+# Download both immutable assets to local files.
+curl -fsSL -o "${INSTALLER}" "${BASE_URL}/${INSTALLER}"
+curl -fsSL -o "${INSTALLER}.sha256" "${BASE_URL}/${INSTALLER}.sha256"
 
-# Verify the archive before extracting.
-sha256sum --check --status --strict "${ARCHIVE}.sha256"
+# Verify and inspect before local execution.
+sha256sum --check --status --strict "${INSTALLER}.sha256"
+sed -n '1,240p' "${INSTALLER}"
 
-# Extract and place the managed files.
-mkdir -p "${HOME}/.local/bin"
-mkdir -p "${HOME}/.local/share/dbootstrap/catalog"
-tar -xzf "${ARCHIVE}"
-cp dbootstrap "${HOME}/.local/bin/dbootstrap"
-cp catalog/bootstrap.toml "${HOME}/.local/share/dbootstrap/catalog/bootstrap.toml"
+# Install once and opt in to Bash PATH setup in the same invocation.
+bash "${INSTALLER}" --setup-path bash --shell-file "${HOME}/.bashrc"
 ```
 
-### PATH export
+### Opt in to PATH setup
 
-If `${XDG_BIN_HOME:-$HOME/.local/bin}` is not on `PATH`, `install.sh` prints the required export. Add it to your shell session or startup files yourself; the installer does not edit `.bashrc`, `.zshrc`, or any other shell configuration.
+Select one supported shell and exactly one explicit startup file on the initial installation invocation; a matching managed installation rejects a later setup-only invocation unless you use the explicit `--force` lifecycle override. The installer does not auto-detect a shell or startup file.
 
 ```bash
-export PATH="${HOME}/.local/bin:${PATH}"
+# Use this instead of the Bash invocation above for an initial Zsh installation.
+bash "${INSTALLER}" --setup-path zsh --shell-file "${HOME}/.zshrc"
 ```
+
+The selected file takes effect in a fresh interactive shell (`exec bash -i` or `exec zsh -i`). To update the current Bash session instead, run `source "${HOME}/.bashrc"`. The installer edits only the selected marked block and refuses ambiguous, modified, symlinked, or unmarked shell configuration.
 
 ### Reinstall, upgrade, or downgrade
 
@@ -185,7 +164,7 @@ A matching managed installation refuses to overwrite itself unless you explicitl
 
 ### Uninstall
 
-`--uninstall` removes only the managed binary, catalog, and state file. It refuses to delete modified files so your changes are preserved.
+`--uninstall` removes only unchanged managed binary, catalog, and state files, plus an unchanged installer-owned PATH block when one exists. It refuses to delete modified files so your changes are preserved.
 
 ```bash
 ./install.sh --uninstall
@@ -199,7 +178,8 @@ Once installed, `dbootstrap` reads the installed catalog at the managed path by 
 
 - No `sudo`, package manager, or elevated privilege is used.
 - macOS, Windows, and other architectures are not supported by this path.
-- The installer does not edit shell startup files.
+- The reviewed flow does not use `curl | bash`, moving/latest installer URLs, or automatic shell/profile detection.
+- PATH setup supports only explicit Bash or Zsh startup-file targets; it never edits multiple files.
 - The installer does not adopt or remove existing unmarked installations.
 
 ## Homebrew stable channel (Linux/WSL)

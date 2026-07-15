@@ -33,6 +33,26 @@ assert_file_missing() {
   fi
 }
 
+assert_no_separate_non_force_path_setup() {
+  local content="$1"
+  local saw_unflagged_install=0
+  local line
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[[:space:]]*bash[[:space:]]+\"\$\{INSTALLER\}\"[[:space:]]*$ ]]; then
+      saw_unflagged_install=1
+      continue
+    fi
+
+    if (( saw_unflagged_install )) &&
+      [[ "$line" =~ ^[[:space:]]*bash[[:space:]]+\"\$\{INSTALLER\}\"([[:space:]]|$) ]] &&
+      [[ "$line" == *"--setup-path"* && "$line" != *"--force"* ]]; then
+      fail "README must not document a no-flag installer invocation followed by separate non-force --setup-path invocation"
+      return
+    fi
+  done <<< "$content"
+}
+
 file_digest_local() {
   sha256sum "$1" | awk '{print $1}'
 }
@@ -646,7 +666,40 @@ test_path_setup_restores_existing_install() {
   assert_eq "$(cat "$home/.local/share/dbootstrap/install-state.toml")" "$old_state" "install state restored after PATH failure"
 }
 
+# RED: installation documentation must keep the immutable installer review flow explicit.
+test_docs() {
+  local readme
+  readme="$(dirname "$(realpath "$INSTALLER")")/README.md"
+  local content
+  content="$(cat "$readme")"
+
+  assert_contains "$content" 'INSTALLER="dbootstrap_install_${VERSION}.sh"' "versioned installer name"
+  assert_contains "$content" 'curl -fsSL -o "${INSTALLER}" "${BASE_URL}/${INSTALLER}"' "installer download-to-file"
+  assert_contains "$content" 'curl -fsSL -o "${INSTALLER}.sha256" "${BASE_URL}/${INSTALLER}.sha256"' "installer checksum download"
+  assert_contains "$content" 'sha256sum --check --status --strict "${INSTALLER}.sha256"' "installer checksum verification"
+  assert_contains "$content" 'sed -n '\''1,240p'\'' "${INSTALLER}"' "installer inspection"
+  assert_contains "$content" '# Install once and opt in to Bash PATH setup in the same invocation.' "initial setup invocation guidance"
+  assert_contains "$content" 'bash "${INSTALLER}" --setup-path bash --shell-file "${HOME}/.bashrc"' "explicit Bash setup"
+  assert_contains "$content" 'bash "${INSTALLER}" --setup-path zsh --shell-file "${HOME}/.zshrc"' "explicit Zsh setup"
+  assert_no_separate_non_force_path_setup "$content"
+  assert_contains "$content" 'source "${HOME}/.bashrc"' "Bash source semantics"
+  assert_contains "$content" 'exec zsh' "Zsh fresh-shell semantics"
+  assert_contains "$content" 'does not use `curl | bash`' "pipeline exclusion"
+  assert_contains "$content" 'does not auto-detect a shell or startup file' "auto-detection exclusion"
+}
+
 main() {
+
+  if [[ "${1:-}" == "docs" ]]; then
+    test_docs
+    if [[ $FAILED -ne 0 ]]; then
+      echo "Some tests failed."
+      exit 1
+    fi
+    echo "All install documentation tests passed."
+    return
+  fi
+
   if [[ "${1:-}" == "path-helpers" ]]; then
     test_installer_exists
     test_path_helpers
@@ -691,6 +744,7 @@ main() {
   test_transaction_rollback_on_failure
   test_transaction_recovery_on_next_run
   test_path_helpers
+  test_docs
 
   if [[ $FAILED -ne 0 ]]; then
     echo "Some tests failed."
