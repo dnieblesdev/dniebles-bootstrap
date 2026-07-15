@@ -1,0 +1,176 @@
+name: Homebrew formula PR validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - Formula/dbootstrap.rb
+      - test/homebrew_stable_channel_test.rb
+      - internal/ci/homebrew_stable_channel_validation_test.go
+      - .github/workflows/homebrew-formula-pr-validation.yml
+
+permissions:
+  contents: read
+
+jobs:
+  linux-amd64:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify formula contract
+        run: |
+          if ! test -f Formula/dbootstrap.rb; then
+            exit 1
+          fi
+          ruby test/homebrew_stable_channel_test.rb
+      - name: Install Homebrew
+        run: |
+          if ! command -v brew >/dev/null; then
+            NONINTERACTIVE=1 HOMEBREW_INSTALL_FROM_API=0 /bin/bash -c "$(curl --fail --location --silent --show-error https://raw.githubusercontent.com/Homebrew/install/c7952e40b7957268f61643152f4db725379b292e/install.sh)"
+          fi
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew --version
+      - name: Stage checked-out formula in a no-git local tap
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          candidate_tap="$(brew --repository)/Library/Taps/local/homebrew-pr-candidate"
+          mkdir -p homebrew-receipt "$candidate_tap/Formula"
+          sha256sum Formula/dbootstrap.rb | awk '{print $1}' > homebrew-receipt/original-formula-sha256.txt
+          cp Formula/dbootstrap.rb "$candidate_tap/Formula/dbootstrap.rb"
+          sha256sum "$candidate_tap/Formula/dbootstrap.rb" | awk '{print $1}' > homebrew-receipt/staged-formula-sha256.txt
+          cmp homebrew-receipt/original-formula-sha256.txt homebrew-receipt/staged-formula-sha256.txt
+      - name: Audit, style, and install staged candidate
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          export HOMEBREW_CACHE="$RUNNER_TEMP/homebrew-empty-cache"
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          mkdir -p "$HOMEBREW_CACHE"
+          brew audit --strict --formula local/pr-candidate/dbootstrap
+          brew style local/pr-candidate/dbootstrap
+          HOMEBREW_NO_SANDBOX_LINUX=1 HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source local/pr-candidate/dbootstrap
+          HOMEBREW_NO_SANDBOX_LINUX=1 brew test local/pr-candidate/dbootstrap
+          dbootstrap --version
+          test -f "$(brew --prefix)/share/dbootstrap/catalog/bootstrap.toml"
+          brew uninstall dbootstrap
+      - name: Write receipt
+        if: always()
+        run: |
+          mkdir -p homebrew-receipt
+          uname -a > homebrew-receipt/system.txt
+          git rev-parse HEAD > homebrew-receipt/formula-ref.txt
+      - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808
+        if: always()
+        with:
+          name: homebrew-formula-pr-linux-amd64
+          path: homebrew-receipt
+          if-no-files-found: error
+
+  linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify formula contract
+        run: |
+          if ! test -f Formula/dbootstrap.rb; then
+            exit 1
+          fi
+          ruby test/homebrew_stable_channel_test.rb
+      - name: Install Homebrew
+        run: |
+          if ! command -v brew >/dev/null; then
+            NONINTERACTIVE=1 HOMEBREW_INSTALL_FROM_API=0 /bin/bash -c "$(curl --fail --location --silent --show-error https://raw.githubusercontent.com/Homebrew/install/c7952e40b7957268f61643152f4db725379b292e/install.sh)"
+          fi
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew --version
+      - name: Stage checked-out formula in a no-git local tap
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          candidate_tap="$(brew --repository)/Library/Taps/local/homebrew-pr-candidate"
+          mkdir -p homebrew-receipt "$candidate_tap/Formula"
+          sha256sum Formula/dbootstrap.rb | awk '{print $1}' > homebrew-receipt/original-formula-sha256.txt
+          cp Formula/dbootstrap.rb "$candidate_tap/Formula/dbootstrap.rb"
+          sha256sum "$candidate_tap/Formula/dbootstrap.rb" | awk '{print $1}' > homebrew-receipt/staged-formula-sha256.txt
+          cmp homebrew-receipt/original-formula-sha256.txt homebrew-receipt/staged-formula-sha256.txt
+      - name: Audit, style, and install staged candidate
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          export HOMEBREW_CACHE="$RUNNER_TEMP/homebrew-empty-cache"
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          mkdir -p "$HOMEBREW_CACHE"
+          brew audit --strict --formula local/pr-candidate/dbootstrap
+          brew style local/pr-candidate/dbootstrap
+          HOMEBREW_NO_SANDBOX_LINUX=1 HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source local/pr-candidate/dbootstrap
+          HOMEBREW_NO_SANDBOX_LINUX=1 brew test local/pr-candidate/dbootstrap
+          dbootstrap --version
+          test -f "$(brew --prefix)/share/dbootstrap/catalog/bootstrap.toml"
+          brew uninstall dbootstrap
+      - name: Write receipt
+        if: always()
+        run: |
+          mkdir -p homebrew-receipt
+          uname -a > homebrew-receipt/system.txt
+          git rev-parse HEAD > homebrew-receipt/formula-ref.txt
+      - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808
+        if: always()
+        with:
+          name: homebrew-formula-pr-linux-arm64
+          path: homebrew-receipt
+          if-no-files-found: error
+
+  macos-rejection:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify formula contract
+        run: |
+          if ! test -f Formula/dbootstrap.rb; then
+            exit 1
+          fi
+          ruby test/homebrew_stable_channel_test.rb
+      - name: Stage checked-out formula in a no-git local tap
+        run: |
+          candidate_tap="$(brew --repository)/Library/Taps/local/homebrew-pr-candidate"
+          mkdir -p homebrew-receipt "$candidate_tap/Formula"
+          shasum -a 256 Formula/dbootstrap.rb | awk '{print $1}' > homebrew-receipt/original-formula-sha256.txt
+          cp Formula/dbootstrap.rb "$candidate_tap/Formula/dbootstrap.rb"
+          shasum -a 256 "$candidate_tap/Formula/dbootstrap.rb" | awk '{print $1}' > homebrew-receipt/staged-formula-sha256.txt
+          cmp homebrew-receipt/original-formula-sha256.txt homebrew-receipt/staged-formula-sha256.txt
+      - name: Prove staged macOS rejection before a release asset fetch
+        run: |
+          export HOMEBREW_CACHE="$RUNNER_TEMP/homebrew-empty-cache"
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          mkdir -p "$HOMEBREW_CACHE"
+          brew audit --strict --formula local/pr-candidate/dbootstrap
+          brew style local/pr-candidate/dbootstrap
+          set +e
+          HOMEBREW_NO_INSTALL_FROM_API=1 brew install --build-from-source local/pr-candidate/dbootstrap > macos-install.log 2>&1
+          status=$?
+          set -e
+          test "$status" -ne 0
+          grep -F "macOS is unsupported" macos-install.log
+          ! grep -F "releases/download/v0.1.0" macos-install.log
+          ! find "$HOMEBREW_CACHE" -type f -name '*dbootstrap*' -print -quit | grep -q .
+          echo "release asset request count: 0" > macos-rejection.txt
+      - name: Write receipt
+        if: always()
+        run: |
+          mkdir -p homebrew-receipt
+          uname -a > homebrew-receipt/system.txt
+          git rev-parse HEAD > homebrew-receipt/formula-ref.txt
+          cp macos-rejection.txt homebrew-receipt/ 2>/dev/null || true
+          cp macos-install.log homebrew-receipt/ 2>/dev/null || true
+      - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808
+        if: always()
+        with:
+          name: homebrew-formula-pr-macos-rejection
+          path: homebrew-receipt
+          if-no-files-found: error
