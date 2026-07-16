@@ -47,6 +47,7 @@ func (r *OSCommandRunner) RunCommand(ctx context.Context, req CommandRequest) Co
 	if req.Env != nil {
 		cmd.Env = req.Env
 	}
+	cmd.ExtraFiles = req.ExtraFiles
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

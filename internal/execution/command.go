@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"time"
 )
@@ -25,6 +26,9 @@ type CommandRequest struct {
 	Dir        string
 	Env        []string
 	Timeout    time.Duration
+	// ExtraFiles are inherited by the child starting at descriptor 3. This is
+	// reserved for verified local descriptors; it does not change argv semantics.
+	ExtraFiles []*os.File
 }
 
 // CommandStatus is the outcome of a command execution.
