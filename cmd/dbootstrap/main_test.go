@@ -3285,6 +3285,7 @@ func TestParseSetupFlags(t *testing.T) {
 	}{
 		{name: "preview accepts catalog", args: []string{"--catalog", "catalog.toml"}, wantMode: applyModeDefaultNonMutating, wantOK: true},
 		{name: "confirmed sudo is allowed", args: []string{"--yes", "--sudo"}, wantMode: applyModeConfirmedSudo, wantOK: true},
+		{name: "confirmed sudo acquisition composes both modes", args: []string{"--yes", "--sudo", "--acquire-homebrew"}, wantMode: applyModeConfirmedSudoAcquire, wantOK: true},
 		{name: "profile selector is rejected", args: []string{"--profile", "dev"}},
 		{name: "resource selector is rejected", args: []string{"--resource", "tool:git"}},
 		{name: "positional is rejected", args: []string{"dev"}},
