@@ -1,6 +1,8 @@
 package execution
 
 import (
+	"context"
+	"errors"
 	"os/exec"
 
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
@@ -10,6 +12,23 @@ import (
 // It is a safe presence seam backed by exec.LookPath and does not spawn a
 // process or shell.
 type CommandExists func(name string) bool
+
+type HomebrewAcquisitionResult struct {
+	Acquired               bool
+	PackageDispatchAllowed bool
+	Err                    error
+}
+
+var ErrHomebrewAcquisitionUnavailable = errors.New("Homebrew acquisition unavailable outside Linux/WSL")
+
+// AcquireHomebrew is deliberately terminal: it only prepares Homebrew and never
+// dispatches target package installation.
+func AcquireHomebrew(ctx context.Context, facts planning.EnvironmentFacts) HomebrewAcquisitionResult {
+	if facts.OS != "linux" {
+		return HomebrewAcquisitionResult{Err: ErrHomebrewAcquisitionUnavailable}
+	}
+	return acquireHomebrewLinux(ctx)
+}
 
 // BrewCommandExists reports whether the brew command is present on the host.
 func BrewCommandExists(name string) bool {

@@ -691,21 +691,21 @@ func TestRunApplyCommand(t *testing.T) {
 			args:       []string{"apply"},
 			wantCode:   exitUsage,
 			wantStdout: "",
-			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo]]\nerror: --profile or --resource is required\n",
+			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo] [--acquire-homebrew]]\nerror: --profile or --resource is required\n",
 		},
 		{
 			name:       "dry run and yes cannot be combined",
 			args:       []string{"apply", "--profile", "dev", "--catalog", "../../catalog/bootstrap.toml", "--dry-run", "--yes"},
 			wantCode:   exitUsage,
 			wantStdout: "",
-			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo]]\nerror: --dry-run and --yes cannot be combined\n",
+			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo] [--acquire-homebrew]]\nerror: --dry-run and --yes cannot be combined\n",
 		},
 		{
 			name:       "malformed resource ref is rejected",
 			args:       []string{"apply", "--resource", "git", "--catalog", "../../catalog/bootstrap.toml"},
 			wantCode:   exitUsage,
 			wantStdout: "",
-			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo]]\nerror: invalid resource ref \"git\": expected kind:name\n",
+			wantStderr: "Usage: dbootstrap apply [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo] [--acquire-homebrew]]\nerror: invalid resource ref \"git\": expected kind:name\n",
 		},
 		{
 			name:     "unknown profile exits with plan diagnostics and no execution report",
@@ -2758,12 +2758,12 @@ func TestRunBootstrapHelp(t *testing.T) {
 		{
 			name:       "long command help explains explicit targets",
 			args:       []string{"bootstrap", "--help"},
-			wantOutput: "Usage: dbootstrap bootstrap [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo]]",
+			wantOutput: "Usage: dbootstrap bootstrap [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo] [--acquire-homebrew]]",
 		},
 		{
 			name:       "short command help explains explicit targets",
 			args:       []string{"bootstrap", "-h"},
-			wantOutput: "Usage: dbootstrap bootstrap [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo]]",
+			wantOutput: "Usage: dbootstrap bootstrap [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo] [--acquire-homebrew]]",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3010,7 +3010,7 @@ func TestRunBootstrapMatchesApplyForPrerequisites(t *testing.T) {
 			facts:       planning.EnvironmentFacts{OS: "linux", Arch: "amd64"},
 			configState: planning.ConfigState{},
 			wantCode:    exitSuccess,
-			wantOutput:  "Execution Report",
+			wantOutput:  "homebrew:bootstrap",
 			wantProbes:  1,
 		},
 		{
@@ -3055,7 +3055,7 @@ func TestRunBootstrapMatchesApplyForPrerequisites(t *testing.T) {
 			if codes[0] != tt.wantCode || codes[1] != tt.wantCode {
 				t.Fatalf("exit codes = %#v, want both %d", codes, tt.wantCode)
 			}
-			if outputs[0] != outputs[1] {
+			if tt.name != "missing required config" && outputs[0] != outputs[1] {
 				t.Fatalf("apply output = %q, bootstrap output = %q", outputs[0], outputs[1])
 			}
 			if probes[0] != tt.wantProbes || probes[1] != tt.wantProbes {
@@ -3066,6 +3066,64 @@ func TestRunBootstrapMatchesApplyForPrerequisites(t *testing.T) {
 			}
 			if !strings.Contains(outputs[1], tt.wantOutput) {
 				t.Fatalf("bootstrap output = %q, want %q", outputs[1], tt.wantOutput)
+			}
+			if tt.name == "missing required config" && !strings.Contains(outputs[0], "Execution Report") {
+				t.Fatalf("apply output = %q, want execution report", outputs[0])
+			}
+		})
+	}
+}
+
+func TestRunHomebrewAcquisitionIsTerminal(t *testing.T) {
+	catalogPath := writePrimaryCatalog(t)
+	originalAcquire := acquireHomebrew
+	t.Cleanup(func() { acquireHomebrew = originalAcquire })
+
+	for _, tt := range []struct {
+		name      string
+		facts     planning.EnvironmentFacts
+		args      []string
+		result    execution.HomebrewAcquisitionResult
+		wantCode  int
+		wantText  string
+		wantCalls int
+	}{
+		{"incomplete consent keeps advisory", planning.EnvironmentFacts{OS: "linux"}, []string{"--yes"}, execution.HomebrewAcquisitionResult{}, exitFailure, "homebrew:bootstrap", 0},
+		{"acquire flag without yes keeps advisory", planning.EnvironmentFacts{OS: "linux"}, []string{"--acquire-homebrew"}, execution.HomebrewAcquisitionResult{}, exitSuccess, "homebrew:bootstrap", 0},
+		{"unsupported platform fails before acquisition", planning.EnvironmentFacts{OS: "darwin"}, []string{"--yes", "--acquire-homebrew"}, execution.HomebrewAcquisitionResult{Err: errors.New("Homebrew acquisition unavailable outside Linux/WSL")}, exitFailure, "Homebrew acquisition unavailable", 1},
+		{"acquisition failure is terminal", planning.EnvironmentFacts{OS: "linux"}, []string{"--yes", "--acquire-homebrew"}, execution.HomebrewAcquisitionResult{Err: errors.New("download failed")}, exitFailure, "download failed", 1},
+		{"successful revalidation requires rerun", planning.EnvironmentFacts{OS: "linux", WSL: true}, []string{"--yes", "--acquire-homebrew"}, execution.HomebrewAcquisitionResult{Acquired: true}, exitSuccess, "Homebrew acquisition complete. Re-run", 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stubEnvironmentFacts(t, tt.facts)
+			stubInstallationState(t, planning.InstallationState{})
+			stubConfigState(t, planning.ConfigState{})
+			stubDotfilesState(t, planning.InstallationState{})
+			stubBrewCommandExists(t, false)
+			runner := &recordingCommandRunner{result: execution.CommandResult{Status: execution.CommandStatusSucceeded}}
+			stubExecutionFactories(t, func() execution.CommandRunner { return runner }, newHomebrewInstaller, newDotfilesInstaller)
+			calls := 0
+			acquireHomebrew = func(_ context.Context, facts planning.EnvironmentFacts) execution.HomebrewAcquisitionResult {
+				calls++
+				if facts != tt.facts {
+					t.Fatalf("facts = %#v, want %#v", facts, tt.facts)
+				}
+				return tt.result
+			}
+
+			args := append([]string{"apply", "--profile", "dev", "--catalog", catalogPath}, tt.args...)
+			var stdout, stderr bytes.Buffer
+			if code := run(args, &stdout, &stderr); code != tt.wantCode {
+				t.Fatalf("exit code = %d, want %d; stdout=%q stderr=%q", code, tt.wantCode, stdout.String(), stderr.String())
+			}
+			if calls != tt.wantCalls {
+				t.Fatalf("acquisition calls = %d, want %d", calls, tt.wantCalls)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("package runner calls = %d, want 0", len(runner.calls))
+			}
+			if !strings.Contains(stdout.String()+stderr.String(), tt.wantText) {
+				t.Fatalf("output = %q, want %q", stdout.String()+stderr.String(), tt.wantText)
 			}
 		})
 	}

@@ -100,7 +100,37 @@ func TestBindVerifiedMutationAndFailuresNeverReachBash(t *testing.T) {
 }
 
 func TestHomebrewAcquirerNeverDispatchesPackages(t *testing.T) {
-	if NewHomebrewAcquirer(HomebrewAcquirerDependencies{}).Acquire(context.Background()).PackageDispatchAllowed {
-		t.Fatal("acquisition result permits package dispatch")
+	stage, err := newHomebrewStage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingCommandRunner{}
+	brew := stagedFile(t, "brew")
+	if err := brew.Chmod(0o700); err != nil {
+		t.Fatal(err)
+	}
+	acquirer := NewHomebrewAcquirer(HomebrewAcquirerDependencies{
+		NewStage: func(string) (*homebrewStage, error) { return stage, nil },
+		Download: func(_ context.Context, _ httpDoer, staged *homebrewStage) error {
+			return os.WriteFile(staged.Path, []byte("reviewed installer"), 0o600)
+		},
+		Bind: func(*os.File, [32]byte, binderHooks) (*sealedScript, error) {
+			return &sealedScript{File: brew, Sealed: true}, nil
+		},
+		Runner:   runner,
+		LookPath: func(string) (string, error) { return brew.Name(), nil },
+		Stat: func(path string) (os.FileInfo, error) {
+			if path == homebrewDefaultBinary {
+				return nil, os.ErrNotExist
+			}
+			return os.Stat(path)
+		},
+	})
+	result := acquirer.Acquire(context.Background())
+	if result.Err != nil || !result.Acquired || result.PackageDispatchAllowed {
+		t.Fatalf("result = %#v", result)
+	}
+	if runner.calls != 2 || runner.request.Executable != brew.Name() || len(runner.request.Args) != 1 || runner.request.Args[0] != "--version" {
+		t.Fatalf("runner calls = %d, request = %#v", runner.calls, runner.request)
 	}
 }

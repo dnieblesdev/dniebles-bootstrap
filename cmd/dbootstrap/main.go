@@ -100,6 +100,7 @@ const (
 	applyModeDryRun             applyMode = "dry-run"
 	applyModeConfirmed          applyMode = "confirmed"
 	applyModeConfirmedSudo      applyMode = "confirmed-sudo"
+	applyModeConfirmedAcquire   applyMode = "confirmed-acquire-homebrew"
 )
 
 var (
@@ -120,6 +121,7 @@ var (
 		provider := execution.NewLocalDotfilesProvider(runner, execution.DotfilesBaseResolver{})
 		return execution.NewDotfilesInstaller(provider)
 	}
+	acquireHomebrew = execution.AcquireHomebrew
 )
 
 func aptCommandExistsOnPath(name string) bool {
@@ -250,6 +252,17 @@ func runApplyLikeCatalog(command string, catalog planning.Catalog, catalogPath s
 	}
 
 	executionPlan := result.Plan
+	if mode == applyModeConfirmedAcquire && planHasBrewBackedInstall(result.Plan) && !brewCommandExists("brew") {
+		acquisition := acquireHomebrew(context.Background(), facts)
+		if acquisition.Err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", acquisition.Err)
+			return exitFailure
+		}
+		if acquisition.Acquired {
+			fmt.Fprintln(stdout, "Homebrew acquisition complete. Re-run dbootstrap apply to install packages.")
+			return exitSuccess
+		}
+	}
 	if isConfirmedMode(mode) && planHasEligibleBrewFormulaPackage(result.Plan) {
 		var presenceRunner execution.CommandRunner
 		if brewCommandExists("brew") {
@@ -367,7 +380,7 @@ func planHasAptBackedInstall(plan planning.Plan) bool {
 }
 
 func isConfirmedMode(mode applyMode) bool {
-	return mode == applyModeConfirmed || mode == applyModeConfirmedSudo
+	return mode == applyModeConfirmed || mode == applyModeConfirmedSudo || mode == applyModeConfirmedAcquire
 }
 
 func newNoopApplyRunner() *execution.Runner {
@@ -497,6 +510,7 @@ func parseApplyLikeFlags(command string, args []string, stderr io.Writer) (plann
 	catalogPath := flags.String("catalog", "", "catalog TOML file path")
 	dryRun := flags.Bool("dry-run", false, "run in non-mutating dry-run mode")
 	yes := flags.Bool("yes", false, "confirmed mode; may run eligible Homebrew, Linux APT, and selected dotfile work")
+	acquireHomebrew := flags.Bool("acquire-homebrew", false, "with --yes, acquire missing Homebrew on Linux/WSL and stop before package installation")
 	sudo := flags.Bool("sudo", false, "use sudo for confirmed APT installation")
 
 	if err := flags.Parse(args); err != nil {
@@ -542,6 +556,9 @@ func parseApplyLikeFlags(command string, args []string, stderr io.Writer) (plann
 		if *sudo {
 			mode = applyModeConfirmedSudo
 		}
+		if *acquireHomebrew {
+			mode = applyModeConfirmedAcquire
+		}
 	}
 
 	if *catalogPath == "" {
@@ -558,6 +575,7 @@ func parseSetupFlags(args []string, stderr io.Writer) (string, applyMode, bool) 
 	catalogPath := flags.String("catalog", "", "catalog TOML file path")
 	dryRun := flags.Bool("dry-run", false, "run in non-mutating dry-run mode")
 	yes := flags.Bool("yes", false, "confirmed mode")
+	acquireHomebrew := flags.Bool("acquire-homebrew", false, "with --yes, acquire missing Homebrew on Linux/WSL and stop before package installation")
 	sudo := flags.Bool("sudo", false, "use sudo for confirmed APT installation")
 
 	if err := flags.Parse(args); err != nil {
@@ -587,6 +605,9 @@ func parseSetupFlags(args []string, stderr io.Writer) (string, applyMode, bool) 
 		mode = applyModeConfirmed
 		if *sudo {
 			mode = applyModeConfirmedSudo
+		}
+		if *acquireHomebrew {
+			mode = applyModeConfirmedAcquire
 		}
 	}
 	if *catalogPath == "" {
@@ -732,14 +753,14 @@ func printApplyUsage(w io.Writer) {
 }
 
 func printApplyLikeUsage(command string, w io.Writer) {
-	fmt.Fprintf(w, "Usage: dbootstrap %s [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo]]\n", command)
+	fmt.Fprintf(w, "Usage: dbootstrap %s [--profile <name>] [--resource <kind:name>] [--catalog <path>] [--dry-run] [--yes [--sudo] [--acquire-homebrew]]\n", command)
 	if command == "bootstrap" {
 		fmt.Fprintln(w, "Select at least one --profile or --resource. Default and --dry-run do not mutate; --yes confirms eligible work and --sudo requires --yes.")
 	}
 }
 
 func printSetupUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: dbootstrap setup [--catalog <path>] [--dry-run] [--yes [--sudo]]")
+	fmt.Fprintln(w, "Usage: dbootstrap setup [--catalog <path>] [--dry-run] [--yes [--sudo] [--acquire-homebrew]]")
 }
 
 func isHelpRequest(args []string) bool {
