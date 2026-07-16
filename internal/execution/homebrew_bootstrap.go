@@ -21,13 +21,15 @@ type HomebrewAcquisitionResult struct {
 
 var ErrHomebrewAcquisitionUnavailable = errors.New("Homebrew acquisition unavailable outside Linux/WSL")
 
+var acquireHomebrewLinuxFn = acquireHomebrewLinux
+
 // AcquireHomebrew is deliberately terminal: it only prepares Homebrew and never
 // dispatches target package installation.
 func AcquireHomebrew(ctx context.Context, facts planning.EnvironmentFacts) HomebrewAcquisitionResult {
 	if facts.OS != "linux" {
 		return HomebrewAcquisitionResult{Err: ErrHomebrewAcquisitionUnavailable}
 	}
-	return acquireHomebrewLinux(ctx)
+	return acquireHomebrewLinuxFn(ctx)
 }
 
 // BrewCommandExists reports whether the brew command is present on the host.

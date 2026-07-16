@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -133,4 +134,76 @@ func TestHomebrewAcquirerNeverDispatchesPackages(t *testing.T) {
 	if runner.calls != 2 || runner.request.Executable != brew.Name() || len(runner.request.Args) != 1 || runner.request.Args[0] != "--version" {
 		t.Fatalf("runner calls = %d, request = %#v", runner.calls, runner.request)
 	}
+}
+
+func TestHomebrewAcquirerFailurePaths(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		downloadErr   error
+		commandStatus []CommandStatus
+		wantError     string
+		wantBinds     int
+		wantCommands  int
+	}{
+		{name: "download failure stops before binding", downloadErr: errors.New("download failed"), wantError: "download Homebrew installer", wantBinds: 0, wantCommands: 0},
+		{name: "installer execution failure stops before lookup", commandStatus: []CommandStatus{CommandStatusFailed}, wantError: "execute Homebrew installer", wantBinds: 1, wantCommands: 1},
+		{name: "revalidation failure is terminal", commandStatus: []CommandStatus{CommandStatusSucceeded, CommandStatusFailed}, wantError: "revalidate Homebrew", wantBinds: 1, wantCommands: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stage, err := newHomebrewStage(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			sealed := stagedFile(t, "verified installer")
+			defer sealed.Close()
+			brew := stagedFile(t, "brew")
+			defer brew.Close()
+			if err := brew.Chmod(0o700); err != nil {
+				t.Fatal(err)
+			}
+			downloads, binds := 0, 0
+			runner := &scriptedCommandRunner{statuses: tc.commandStatus}
+			acquirer := NewHomebrewAcquirer(HomebrewAcquirerDependencies{
+				NewStage: func(string) (*homebrewStage, error) { return stage, nil },
+				Download: func(_ context.Context, _ httpDoer, staged *homebrewStage) error {
+					downloads++
+					if tc.downloadErr != nil {
+						return tc.downloadErr
+					}
+					return os.WriteFile(staged.Path, []byte("reviewed installer"), 0o600)
+				},
+				Bind: func(*os.File, [32]byte, binderHooks) (*sealedScript, error) {
+					binds++
+					return &sealedScript{File: sealed, Sealed: true}, nil
+				},
+				Runner:   runner,
+				LookPath: func(string) (string, error) { return brew.Name(), nil },
+				Stat: func(path string) (os.FileInfo, error) {
+					if path == homebrewDefaultBinary {
+						return nil, os.ErrNotExist
+					}
+					return os.Stat(path)
+				},
+			})
+
+			result := acquirer.Acquire(context.Background())
+			if result.Err == nil || !strings.Contains(result.Err.Error(), tc.wantError) || result.Acquired {
+				t.Fatalf("result = %#v, want %q failure", result, tc.wantError)
+			}
+			if downloads != 1 || binds != tc.wantBinds || runner.calls != tc.wantCommands {
+				t.Fatalf("downloads=%d binds=%d commands=%d", downloads, binds, runner.calls)
+			}
+		})
+	}
+}
+
+type scriptedCommandRunner struct {
+	calls    int
+	statuses []CommandStatus
+}
+
+func (r *scriptedCommandRunner) RunCommand(_ context.Context, request CommandRequest) CommandResult {
+	status := r.statuses[r.calls]
+	r.calls++
+	return CommandResult{Request: request, Status: status, Err: errors.New("command failed")}
 }

@@ -1,11 +1,30 @@
 package execution
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/dnieblesdev/dniebles-bootstrap/internal/planning"
 )
+
+func TestAcquireHomebrewRejectsNonLinuxBeforeLinuxAcquirer(t *testing.T) {
+	original := acquireHomebrewLinuxFn
+	t.Cleanup(func() { acquireHomebrewLinuxFn = original })
+	calls := 0
+	acquireHomebrewLinuxFn = func(context.Context) HomebrewAcquisitionResult {
+		calls++
+		return HomebrewAcquisitionResult{Acquired: true}
+	}
+
+	result := AcquireHomebrew(context.Background(), planning.EnvironmentFacts{OS: "darwin"})
+	if result.Err != ErrHomebrewAcquisitionUnavailable || result.Acquired {
+		t.Fatalf("result = %#v", result)
+	}
+	if calls != 0 {
+		t.Fatalf("Linux acquirer calls = %d, want 0 before download", calls)
+	}
+}
 
 func TestAppendHomebrewBootstrapNoBrewResources(t *testing.T) {
 	report := ExecutionReport{Results: []StepResult{}}

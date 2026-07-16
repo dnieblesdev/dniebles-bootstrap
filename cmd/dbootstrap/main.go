@@ -96,11 +96,12 @@ var defaultCatalogPath = func() string {
 type applyMode string
 
 const (
-	applyModeDefaultNonMutating applyMode = "default-non-mutating"
-	applyModeDryRun             applyMode = "dry-run"
-	applyModeConfirmed          applyMode = "confirmed"
-	applyModeConfirmedSudo      applyMode = "confirmed-sudo"
-	applyModeConfirmedAcquire   applyMode = "confirmed-acquire-homebrew"
+	applyModeDefaultNonMutating   applyMode = "default-non-mutating"
+	applyModeDryRun               applyMode = "dry-run"
+	applyModeConfirmed            applyMode = "confirmed"
+	applyModeConfirmedSudo        applyMode = "confirmed-sudo"
+	applyModeConfirmedAcquire     applyMode = "confirmed-acquire-homebrew"
+	applyModeConfirmedSudoAcquire applyMode = "confirmed-sudo-acquire-homebrew"
 )
 
 var (
@@ -252,7 +253,7 @@ func runApplyLikeCatalog(command string, catalog planning.Catalog, catalogPath s
 	}
 
 	executionPlan := result.Plan
-	if mode == applyModeConfirmedAcquire && planHasBrewBackedInstall(result.Plan) && !brewCommandExists("brew") {
+	if isHomebrewAcquisitionMode(mode) && planHasBrewBackedInstall(result.Plan) && !brewCommandExists("brew") {
 		acquisition := acquireHomebrew(context.Background(), facts)
 		if acquisition.Err != nil {
 			fmt.Fprintf(stderr, "error: %v\n", acquisition.Err)
@@ -340,8 +341,8 @@ func buildApplyRunner(mode applyMode, facts planning.EnvironmentFacts, plan plan
 	var toolApt, packageApt execution.Installer
 	if hasApt {
 		if facts.OS == "linux" {
-			toolApt = newAptInstaller(planning.ResourceKindTool, commandRunner(), aptCommandExists, mode == applyModeConfirmedSudo)
-			packageApt = newAptInstaller(planning.ResourceKindPackage, commandRunner(), aptCommandExists, mode == applyModeConfirmedSudo)
+			toolApt = newAptInstaller(planning.ResourceKindTool, commandRunner(), aptCommandExists, isSudoMode(mode))
+			packageApt = newAptInstaller(planning.ResourceKindPackage, commandRunner(), aptCommandExists, isSudoMode(mode))
 		} else {
 			toolApt = execution.NewNonLinuxAptInstaller(planning.ResourceKindTool, facts.OS)
 			packageApt = execution.NewNonLinuxAptInstaller(planning.ResourceKindPackage, facts.OS)
@@ -380,7 +381,15 @@ func planHasAptBackedInstall(plan planning.Plan) bool {
 }
 
 func isConfirmedMode(mode applyMode) bool {
-	return mode == applyModeConfirmed || mode == applyModeConfirmedSudo || mode == applyModeConfirmedAcquire
+	return mode == applyModeConfirmed || mode == applyModeConfirmedSudo || mode == applyModeConfirmedAcquire || mode == applyModeConfirmedSudoAcquire
+}
+
+func isSudoMode(mode applyMode) bool {
+	return mode == applyModeConfirmedSudo || mode == applyModeConfirmedSudoAcquire
+}
+
+func isHomebrewAcquisitionMode(mode applyMode) bool {
+	return mode == applyModeConfirmedAcquire || mode == applyModeConfirmedSudoAcquire
 }
 
 func newNoopApplyRunner() *execution.Runner {
@@ -556,7 +565,9 @@ func parseApplyLikeFlags(command string, args []string, stderr io.Writer) (plann
 		if *sudo {
 			mode = applyModeConfirmedSudo
 		}
-		if *acquireHomebrew {
+		if *acquireHomebrew && *sudo {
+			mode = applyModeConfirmedSudoAcquire
+		} else if *acquireHomebrew {
 			mode = applyModeConfirmedAcquire
 		}
 	}
@@ -606,7 +617,9 @@ func parseSetupFlags(args []string, stderr io.Writer) (string, applyMode, bool) 
 		if *sudo {
 			mode = applyModeConfirmedSudo
 		}
-		if *acquireHomebrew {
+		if *acquireHomebrew && *sudo {
+			mode = applyModeConfirmedSudoAcquire
+		} else if *acquireHomebrew {
 			mode = applyModeConfirmedAcquire
 		}
 	}

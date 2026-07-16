@@ -1983,6 +1983,7 @@ func TestParseApplyFlagsSudoRequiresConfirmedMode(t *testing.T) {
 		mode applyMode
 	}{
 		{"sudo with yes", []string{"--resource", "package:ripgrep", "--yes", "--sudo"}, true, applyModeConfirmedSudo},
+		{"sudo and acquisition compose", []string{"--resource", "package:ripgrep", "--yes", "--sudo", "--acquire-homebrew"}, true, applyModeConfirmedSudoAcquire},
 		{"sudo without yes", []string{"--resource", "package:ripgrep", "--sudo"}, false, ""},
 		{"sudo with dry run", []string{"--resource", "package:ripgrep", "--dry-run", "--sudo"}, false, ""},
 	} {
@@ -2026,6 +2027,22 @@ func TestRunBootstrapAptFixtureContracts(t *testing.T) {
 		{
 			name:      "explicit sudo linux",
 			args:      []string{"--yes", "--sudo"},
+			facts:     planning.EnvironmentFacts{OS: "linux"},
+			available: map[string]bool{"dpkg-query": true, "apt-get": true, "sudo": true},
+			results: []execution.CommandResult{
+				{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching ripgrep", Err: errors.New("exit 1")},
+				{Status: execution.CommandStatusSucceeded},
+			},
+			wantCode: exitSuccess,
+			wantCalls: []execution.CommandRequest{
+				{Executable: "dpkg-query", Args: []string{"--show", "--showformat=${Status}", "ripgrep"}, Timeout: 30 * time.Second},
+				{Executable: "sudo", Args: []string{"apt-get", "install", "-y", "--", "ripgrep"}, Timeout: 10 * time.Minute},
+			},
+			wantOutput: "package:ripgrep [changed] installed ripgrep with APT",
+		},
+		{
+			name:      "acquisition flag preserves requested sudo when brew is present",
+			args:      []string{"--yes", "--sudo", "--acquire-homebrew"},
 			facts:     planning.EnvironmentFacts{OS: "linux"},
 			available: map[string]bool{"dpkg-query": true, "apt-get": true, "sudo": true},
 			results: []execution.CommandResult{
