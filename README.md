@@ -35,6 +35,24 @@ Select targets with `--profile <name>`, repeatable `--resource <kind:name>`, and
 | `--yes` | Explicitly confirms supported eligible execution. Default and dry-run modes do not mutate the host. |
 | `--sudo` | Is meaningful only with confirmed `--yes` where the provider supports it; it does not independently enable mutation. |
 
+### Explicit Homebrew acquisition (Linux/WSL)
+
+If selected work needs Homebrew and `brew` is missing, acquisition is a separate, explicit prerequisite step. On Linux or WSL only, request it with both flags:
+
+```bash
+go run ./cmd/dbootstrap apply --profile dev --yes --acquire-homebrew
+```
+
+The command downloads one reviewed, commit-pinned installer to private local staging, verifies its pinned SHA-256, and executes only those verified local bytes. It never uses a remote `curl | bash`-style pipeline. After the installer exits, `dbootstrap` revalidates that `brew` is usable.
+
+Acquisition is terminal: when revalidation succeeds, no target packages are installed in that run. Start a new terminal command to install the selected packages:
+
+```bash
+go run ./cmd/dbootstrap apply --profile dev --yes
+```
+
+`--yes` alone and `--acquire-homebrew` alone remain non-mutating guidance. The acquisition flow is unavailable on unsupported platforms and fails before downloading there. Download, verification, installer, or post-install Brew revalidation failures also stop safely; no target package installation continues. Fix the reported problem, then rerun deliberately.
+
 ### Confirmed reruns
 
 A confirmed `apply --yes` or `bootstrap --yes` avoids installer mutation only when planning has marked an eligible `tool` or `runtime` as `already_installed` after reliable configured-command detection. The resource must have non-nil presence metadata with `Presence.Kind == "command_exists"` and a non-empty `Presence.Name`. The result is reported as `unchanged`: `already installed; no mutation attempted`.
