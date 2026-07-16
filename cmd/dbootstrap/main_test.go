@@ -2192,6 +2192,57 @@ func TestRunBootstrapAptFixtureContracts(t *testing.T) {
 	}
 }
 
+func TestRunSetupSudoAcquirePreservesAptSudo(t *testing.T) {
+	catalogPath := writeFile(t, t.TempDir(), "catalog.toml", `schema = "dniebles.catalog"
+version = 1
+default_profile = "apt-fixture"
+
+[[packages]]
+id = "ripgrep"
+description = "Opt-in APT fixture"
+[packages.install]
+provider = "apt"
+package = "ripgrep"
+
+[[profiles]]
+id = "apt-fixture"
+resources = ["package:ripgrep"]
+`)
+	stubEnvironmentFacts(t, planning.EnvironmentFacts{OS: "linux"})
+	stubInstallationState(t, planning.InstallationState{})
+	stubConfigState(t, planning.ConfigState{})
+	stubDotfilesState(t, planning.InstallationState{})
+	stubBrewCommandExists(t, true)
+	originalExists := aptCommandExists
+	aptCommandExists = func(name string) bool { return name == "dpkg-query" || name == "apt-get" || name == "sudo" }
+	t.Cleanup(func() { aptCommandExists = originalExists })
+	runner := &sequenceCommandRunner{results: []execution.CommandResult{
+		{Status: execution.CommandStatusFailed, ExitCode: 1, Stderr: "dpkg-query: no packages found matching ripgrep", Err: errors.New("exit 1")},
+		{Status: execution.CommandStatusSucceeded},
+	}}
+	stubExecutionFactories(t, func() execution.CommandRunner { return runner }, newHomebrewInstaller, newDotfilesInstaller)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"setup", "--catalog", catalogPath, "--yes", "--sudo", "--acquire-homebrew"}, &stdout, &stderr)
+
+	if code != exitSuccess {
+		t.Fatalf("run() exit code = %d, want %d; stdout=%q stderr=%q", code, exitSuccess, stdout.String(), stderr.String())
+	}
+	wantCalls := []execution.CommandRequest{
+		{Executable: "dpkg-query", Args: []string{"--show", "--showformat=${Status}", "ripgrep"}, Timeout: 30 * time.Second},
+		{Executable: "sudo", Args: []string{"apt-get", "install", "-y", "--", "ripgrep"}, Timeout: 10 * time.Minute},
+	}
+	if !reflect.DeepEqual(runner.calls, wantCalls) {
+		t.Fatalf("command calls = %#v, want %#v", runner.calls, wantCalls)
+	}
+	if !strings.Contains(stdout.String(), "package:ripgrep [changed] installed ripgrep with APT") {
+		t.Fatalf("stdout = %q, want installed APT result", stdout.String())
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
 func writeAptCatalog(t *testing.T) string {
 	t.Helper()
 	return writeFile(t, t.TempDir(), "apt-provider.toml", `schema = "dniebles.catalog"
