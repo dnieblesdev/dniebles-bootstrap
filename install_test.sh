@@ -666,6 +666,149 @@ test_path_setup_restores_existing_install() {
   assert_eq "$(cat "$home/.local/share/dbootstrap/install-state.toml")" "$old_state" "install state restored after PATH failure"
 }
 
+# An interruption at any PATH commit phase must be recovered before ownership preflight.
+test_path_setup_recovers_interrupted_commit_phases() {
+  local phase fixtures home target state out code
+  for phase in prepared startup state; do
+    fixtures="$(mktemp -d)"; home="$(mktemp -d)"
+    make_home "$home"; setup_fixtures "$fixtures" "v1.2.3"
+    target="$home/.bashrc"; state="$home/.local/share/dbootstrap/shell-path-state.toml"
+    printf 'keep-%s\n' "$phase" > "$target"
+
+    out="$(HOME="$home" INSTALLER_PATH_INTERRUPT_AFTER="$phase" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --setup-path bash --shell-file "$target" 2>&1)" && code=0 || code=$?
+    [[ $code -ne 0 ]] || fail "interruption after PATH $phase phase must fail"
+
+    case "$phase" in
+      prepared)
+        assert_eq "$(cat "$target")" "keep-$phase" "prepared interruption preserves startup file"
+        assert_file_missing "$state"
+        ;;
+      startup)
+        assert_contains "$(cat "$target")" '# >>> dbootstrap managed PATH >>>' "startup interruption publishes block before recovery"
+        assert_file_missing "$state"
+        ;;
+      state)
+        assert_file_exists "$state"
+        assert_contains "$(cat "$target")" '# >>> dbootstrap managed PATH >>>' "state interruption publishes block and state"
+        ;;
+    esac
+
+    out="$(HOME="$home" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --force --setup-path bash --shell-file "$target" 2>&1)" && code=0 || code=$?
+    [[ $code -eq 0 ]] || fail "recovery after PATH $phase interruption should succeed: $out"
+    assert_file_exists "$state"
+    assert_eq "$(grep -Fxc '# >>> dbootstrap managed PATH >>>' "$target")" "1" "recovery after $phase interruption leaves one managed block"
+    assert_eq "$(grep -Fxc '# <<< dbootstrap managed PATH <<<' "$target")" "1" "recovery after $phase interruption leaves one managed end marker"
+  done
+}
+
+# A reported failure after either publish phase rolls back both PATH files and installation.
+test_path_setup_rolls_back_commit_phase_failures() {
+  local phase fixtures home target state out code
+  for phase in startup state; do
+    fixtures="$(mktemp -d)"; home="$(mktemp -d)"
+    make_home "$home"; setup_fixtures "$fixtures" "v1.2.3"
+    target="$home/.zshrc"; state="$home/.local/share/dbootstrap/shell-path-state.toml"
+    printf 'keep-%s\n' "$phase" > "$target"
+
+    out="$(HOME="$home" INSTALLER_PATH_FAIL_AFTER="$phase" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --setup-path zsh --shell-file "$target" 2>&1)" && code=0 || code=$?
+    [[ $code -ne 0 ]] || fail "failure after PATH $phase phase must fail"
+    assert_eq "$(cat "$target")" "keep-$phase" "failure after $phase restores startup file"
+    assert_file_missing "$state"
+    assert_file_missing "$home/.local/bin/dbootstrap"
+    assert_file_missing "$home/.local/share/dbootstrap/catalog/bootstrap.toml"
+    assert_file_missing "$home/.local/share/dbootstrap/install-state.toml"
+  done
+}
+
+# Recovery refuses a startup file changed after an interrupted publish.
+test_path_setup_interruption_recovery_fails_closed_on_modified_startup() {
+  local fixtures home target state out code before
+  fixtures="$(mktemp -d)"; home="$(mktemp -d)"
+  make_home "$home"; setup_fixtures "$fixtures" "v1.2.3"
+  target="$home/.bashrc"; state="$home/.local/share/dbootstrap/shell-path-state.toml"
+  printf 'keep-me\n' > "$target"
+
+  out="$(HOME="$home" INSTALLER_PATH_INTERRUPT_AFTER=startup INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --setup-path bash --shell-file "$target" 2>&1)" && code=0 || code=$?
+  [[ $code -ne 0 ]] || fail "startup interruption must fail"
+  printf '# user change after interruption\n' >> "$target"
+  before="$(cat "$target")"
+
+  out="$(HOME="$home" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --force --setup-path bash --shell-file "$target" 2>&1)" && code=0 || code=$?
+  [[ $code -ne 0 ]] || fail "modified interrupted startup file must refuse recovery"
+  assert_contains "$out" "transaction recovery is ambiguous" "ambiguous recovery output"
+  assert_eq "$(cat "$target")" "$before" "ambiguous recovery preserves modified startup file"
+  assert_file_missing "$state"
+}
+
+# A pre-existing journal that is not an installer transaction must be preserved and refuse setup.
+test_path_setup_refuses_foreign_transaction_journal() {
+  local fixtures home target state path_tx out code
+  fixtures="$(mktemp -d)"; home="$(mktemp -d)"
+  make_home "$home"; setup_fixtures "$fixtures" "v1.2.3"
+  target="$home/.bashrc"; state="$home/.local/share/dbootstrap/shell-path-state.toml"
+  path_tx="${state}.path-tx"
+  printf 'keep-me\n' > "$target"
+  mkdir -p "$path_tx"
+  printf 'foreign journal\n' > "$path_tx/foreign"
+
+  out="$(HOME="$home" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --setup-path bash --shell-file "$target" 2>&1)" && code=0 || code=$?
+  [[ $code -ne 0 ]] || fail "foreign PATH transaction journal must refuse setup"
+  assert_contains "$out" "transaction recovery is ambiguous" "foreign journal rejection output"
+  assert_file_exists "$path_tx/foreign"
+  assert_eq "$(cat "$target")" "keep-me" "foreign journal preserves startup file"
+  assert_file_missing "$home/.local/bin/dbootstrap"
+}
+
+# Uninstall reconciles an interrupted PATH startup publish before removing managed files.
+test_uninstall_recovers_interrupted_path_startup() {
+  local fixtures home target state path_tx out code
+  fixtures="$(mktemp -d)"; home="$(mktemp -d)"
+  make_home "$home"; setup_fixtures "$fixtures" "v1.2.3"
+  target="$home/.bashrc"; state="$home/.local/share/dbootstrap/shell-path-state.toml"
+  printf 'keep-me\n' > "$target"
+
+  out="$(HOME="$home" INSTALLER_PATH_INTERRUPT_AFTER=startup INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" --setup-path bash --shell-file "$target" 2>&1)" && code=0 || code=$?
+  [[ $code -ne 0 ]] || fail "startup interruption must fail"
+  assert_file_missing "$state"
+  assert_contains "$(cat "$target")" '# >>> dbootstrap managed PATH >>>' "startup interruption publishes managed block"
+
+  out="$(HOME="$home" "$INSTALLER" --uninstall 2>&1)" && code=0 || code=$?
+  [[ $code -eq 0 ]] || fail "uninstall should recover startup interruption: $out"
+  assert_eq "$(cat "$target")" "keep-me" "uninstall restores startup file after interruption"
+  assert_file_missing "${state}.path-tx"
+  assert_file_missing "$home/.local/bin/dbootstrap"
+  assert_file_missing "$home/.local/share/dbootstrap/catalog/bootstrap.toml"
+  assert_file_missing "$home/.local/share/dbootstrap/install-state.toml"
+}
+
+# Uninstall must reject a crafted recovery journal before it can overwrite an arbitrary writable file.
+test_uninstall_refuses_crafted_journal_target() {
+  local fixtures home state path_tx victim block source out code
+  fixtures="$(mktemp -d)"; home="$(mktemp -d)"
+  make_home "$home"; setup_fixtures "$fixtures" "v1.2.3"
+  HOME="$home" INSTALLER_API_BASE="file://$fixtures/api" INSTALLER_DOWNLOAD_BASE="file://$fixtures" "$INSTALLER" >/dev/null 2>&1
+  state="$home/.local/share/dbootstrap/shell-path-state.toml"
+  path_tx="${state}.path-tx"
+  victim="$fixtures/arbitrary-writable-target"
+  source="$(realpath "$INSTALLER")"
+  block="$(HOME="$home" bash -c 'source "$1"; render_shell_path_block "$2"' bash "$source" "$home/.local/bin")"
+  printf 'attacker-original\n' > "$path_tx-startup-before-placeholder"
+  mkdir -p "$path_tx"
+  mv "$path_tx-startup-before-placeholder" "$path_tx/startup-before"
+  printf 'attacker-next\n%s\n' "$block" > "$victim"
+  cp "$victim" "$path_tx/startup-next"
+  HOME="$home" bash -c 'source "$1"; write_shell_state "$2" bash "$3" "$4"' bash "$source" "$path_tx/state-next" "$victim" "$block"$'\n'
+
+  out="$(HOME="$home" "$INSTALLER" --uninstall 2>&1)" && code=0 || code=$?
+  [[ $code -ne 0 ]] || fail "crafted recovery journal must refuse uninstall"
+  assert_contains "$out" "transaction recovery is ambiguous" "crafted journal rejection output"
+  assert_eq "$(cat "$victim")" "$(printf 'attacker-next\n%s' "$block")" "crafted journal must not overwrite arbitrary target"
+  assert_file_exists "$path_tx/state-next"
+  assert_file_exists "$home/.local/bin/dbootstrap"
+  assert_file_exists "$home/.local/share/dbootstrap/catalog/bootstrap.toml"
+  assert_file_exists "$home/.local/share/dbootstrap/install-state.toml"
+}
+
 # RED: installation documentation must keep the immutable installer review flow explicit.
 test_docs() {
   local readme
@@ -717,6 +860,12 @@ main() {
     test_path_setup_creates_owned_state
     test_path_setup_safety_and_uninstall
     test_path_setup_restores_existing_install
+    test_path_setup_recovers_interrupted_commit_phases
+    test_path_setup_rolls_back_commit_phase_failures
+    test_path_setup_interruption_recovery_fails_closed_on_modified_startup
+    test_path_setup_refuses_foreign_transaction_journal
+    test_uninstall_recovers_interrupted_path_startup
+    test_uninstall_refuses_crafted_journal_target
     if [[ $FAILED -ne 0 ]]; then
       echo "Some tests failed."
       exit 1

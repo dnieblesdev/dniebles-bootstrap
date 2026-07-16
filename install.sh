@@ -88,10 +88,12 @@ main() {
   shell_state_path="${data_dir}/${SHELL_STATE_NAME}"
 
   validate_shell_setup "$shell" "$shell_count" "$shell_file" "$shell_file_count" "$bin_dir"
+  [[ -z "$shell" ]] || recover_shell_path_transaction "$shell_file" "$shell_state_path" || die "error: shell PATH transaction recovery is ambiguous; refusing setup"
   [[ "$uninstall" != true || -z "$shell" ]] || die "error: --uninstall cannot be combined with PATH setup"
   [[ -z "$shell" ]] || assert_shell_setup_preflight "$shell_file" "$shell_state_path" || die "error: shell PATH ownership is ambiguous; refusing setup"
 
   if [[ "$uninstall" == true ]]; then
+    recover_shell_path_transaction_for_uninstall "$shell_state_path" || die "error: shell PATH transaction recovery is ambiguous; refusing to uninstall"
     do_uninstall "$binary_path" "$catalog_path" "$state_path" "$shell_state_path"
     return 0
   fi
@@ -253,25 +255,25 @@ EOF
 }
 
 owned_shell_block() {
-  local target="$1" state="$2" expected_target="$3" block target64 block64 digest state_shell
-  [[ -f "$state" && ! -L "$state" && -f "$target" && ! -L "$target" ]] || return 1
+  local target="$1" state="$2" expected_target="$3" content_path="${4:-$1}" block target64 block64 digest state_shell
+  [[ -f "$state" && ! -L "$state" && -f "$content_path" && ! -L "$content_path" ]] || return 1
   target64="$(shell_state_value "$state" startup_file_base64)"
   block64="$(shell_state_value "$state" block_bytes_base64)"
   digest="$(shell_state_value "$state" block_digest)"
   state_shell="$(shell_state_value "$state" shell)"
   [[ -n "$target64" && -n "$block64" && -n "$digest" && ( "$state_shell" == bash || "$state_shell" == zsh ) ]] || return 1
-  [[ "${target##*/}" == ".${state_shell}rc" ]] || return 1
+  [[ "${expected_target##*/}" == ".${state_shell}rc" ]] || return 1
   [[ "$(printf '%s' "$target64" | base64 -d)" == "$expected_target" ]] || return 1
   block="$(printf '%s' "$block64" | base64 -d)" || return 1
   block+=$'\n'
   [[ "sha256:$(printf '%s' "$block" | sha256sum | awk '{print $1}')" == "$digest" ]] || return 1
-  [[ "$(grep -Fxc '# >>> dbootstrap managed PATH >>>' "$target")" == 1 ]] || return 1
-  [[ "$(grep -Fxc '# <<< dbootstrap managed PATH <<<' "$target")" == 1 ]] || return 1
-  [[ "$(cat "$target")" == *"${block%$'\n'}"* ]]
+  [[ "$(grep -Fxc '# >>> dbootstrap managed PATH >>>' "$content_path")" == 1 ]] || return 1
+  [[ "$(grep -Fxc '# <<< dbootstrap managed PATH <<<' "$content_path")" == 1 ]] || return 1
+  [[ "$(cat "$content_path")" == *"${block%$'\n'}"* ]]
 }
 
 setup_shell_path() {
-  local shell="$1" target="$2" bin_dir="$3" state="$4" block target_tmp state_tmp before existed=false
+  local shell="$1" target="$2" bin_dir="$3" state="$4" block target_tmp state_tmp path_tx existed=false
   block="$(render_shell_path_block "$bin_dir")"
   block+=$'\n'
   if [[ -e "$state" || -L "$state" ]]; then
@@ -282,24 +284,157 @@ setup_shell_path() {
   [[ ! -e "$target" || -f "$target" ]] || return 1
   [[ "$(grep -Fxc '# >>> dbootstrap managed PATH >>>' "$target" 2>/dev/null || true)" == 0 ]] || return 1
   [[ "$(grep -Fxc '# <<< dbootstrap managed PATH <<<' "$target" 2>/dev/null || true)" == 0 ]] || return 1
-  before="$(mktemp "$(dirname "$target")/.dbootstrap-path-backup.XXXXXX")"
+  path_tx="$(shell_path_transaction_dir_for "$state")"
+  recover_shell_path_transaction "$target" "$state" || return 1
+  mkdir -p "$path_tx"
   target_tmp="$(mktemp "$(dirname "$target")/.dbootstrap-path.XXXXXX")"
   state_tmp="$(mktemp "$(dirname "$state")/.dbootstrap-state.XXXXXX")"
   if [[ -e "$target" ]]; then
     existed=true
-    cp -p "$target" "$before"
+    cp -p "$target" "$path_tx/startup-before"
+  else
+    touch "$path_tx/startup-absent"
   fi
   [[ ! -e "$target" ]] || cat "$target" > "$target_tmp"
   [[ ! -s "$target_tmp" ]] || [[ "$(tail -c 1 "$target_tmp"; printf x)" == $'\nx' ]] || printf '\n' >> "$target_tmp"
   printf '%s\n' "$block" >> "$target_tmp"
-  write_shell_state "$state_tmp" "$shell" "$target" "$block" || return 1
-  mv "$state_tmp" "$state" || return 1
-  if [[ "${INSTALLER_PATH_FAIL_AFTER:-}" == state ]] || ! mv "$target_tmp" "$target"; then
-    [[ "$existed" == true ]] && cp -p "$before" "$target" || rm -f "$target"
-    rm -f "$state" "$target_tmp" "$state_tmp" "$before"
+  cp -p "$target_tmp" "$path_tx/startup-next"
+  write_shell_state "$state_tmp" "$shell" "$target" "$block" || { rm -rf "$path_tx" "$target_tmp" "$state_tmp"; return 1; }
+  cp -p "$state_tmp" "$path_tx/state-next"
+  rm -f "$target_tmp" "$state_tmp"
+
+  if [[ "${INSTALLER_PATH_INTERRUPT_AFTER:-}" == prepared ]]; then
+    kill -KILL "$$"
+  fi
+  target_tmp="$(mktemp "$(dirname "$target")/.dbootstrap-path.XXXXXX")"
+  if ! cp -p "$path_tx/startup-next" "$target_tmp" || ! mv "$target_tmp" "$target"; then
+    rm -f "$target_tmp"
+    rm -rf "$path_tx"
     return 1
   fi
-  rm -f "$before"
+  if [[ "${INSTALLER_PATH_INTERRUPT_AFTER:-}" == startup ]]; then
+    kill -KILL "$$"
+  fi
+  if [[ "${INSTALLER_PATH_FAIL_AFTER:-}" == startup ]] || ! mv "$path_tx/state-next" "$state"; then
+    rollback_shell_path_transaction "$target" "$state" || return 1
+    return 1
+  fi
+  if [[ "${INSTALLER_PATH_INTERRUPT_AFTER:-}" == state ]]; then
+    kill -KILL "$$"
+  fi
+  if [[ "${INSTALLER_PATH_FAIL_AFTER:-}" == state ]]; then
+    rollback_shell_path_transaction "$target" "$state" || return 1
+    return 1
+  fi
+  rm -rf "$path_tx"
+}
+
+rollback_shell_path_transaction() {
+  local target="$1" state="$2" path_tx
+  path_tx="$(shell_path_transaction_dir_for "$state")"
+  if [[ -e "$state" || -L "$state" ]]; then
+    valid_shell_path_transaction "$target" "$state" "$path_tx" || return 1
+    rm -f "$state"
+    if [[ -f "$path_tx/startup-before" && ! -L "$path_tx/startup-before" ]]; then
+      cp -p "$path_tx/startup-before" "$target" || return 1
+    elif [[ -f "$path_tx/startup-absent" && ! -L "$path_tx/startup-absent" ]]; then
+      rm -f "$target"
+    else
+      return 1
+    fi
+    rm -rf "$path_tx"
+    return 0
+  fi
+  recover_shell_path_transaction "$target" "$state"
+}
+
+shell_path_transaction_dir_for() {
+  printf '%s.path-tx' "$1"
+}
+
+valid_shell_path_transaction() {
+  local target="$1" state="$2" path_tx="$3" entry_count expected_entries
+  [[ -d "$path_tx" && ! -L "$path_tx" && -f "$path_tx/startup-next" && ! -L "$path_tx/startup-next" ]] || return 1
+  if [[ -f "$path_tx/startup-before" && ! -L "$path_tx/startup-before" ]]; then
+    [[ ! -e "$path_tx/startup-absent" && ! -L "$path_tx/startup-absent" ]] || return 1
+  elif [[ -f "$path_tx/startup-absent" && ! -L "$path_tx/startup-absent" && ! -s "$path_tx/startup-absent" ]]; then
+    [[ ! -e "$path_tx/startup-before" && ! -L "$path_tx/startup-before" ]] || return 1
+  else
+    return 1
+  fi
+
+  if [[ -e "$state" || -L "$state" ]]; then
+    expected_entries=2
+    owned_shell_block "$target" "$state" "$target" || return 1
+    cmp -s "$target" "$path_tx/startup-next" || return 1
+  else
+    expected_entries=3
+    [[ -f "$path_tx/state-next" && ! -L "$path_tx/state-next" ]] || return 1
+    owned_shell_block "$target" "$path_tx/state-next" "$target" "$path_tx/startup-next" || return 1
+  fi
+  entry_count="$(find "$path_tx" -mindepth 1 -maxdepth 1 -printf . | wc -c)"
+  [[ "$entry_count" -eq "$expected_entries" ]]
+}
+
+recover_shell_path_transaction() {
+  local target="$1" state="$2" path_tx
+  path_tx="$(shell_path_transaction_dir_for "$state")"
+  [[ ! -e "$path_tx" && ! -L "$path_tx" ]] && return 0
+  valid_shell_path_transaction "$target" "$state" "$path_tx" || return 1
+
+  if [[ -e "$state" || -L "$state" ]]; then
+    owned_shell_block "$target" "$state" "$target" || return 1
+    rm -rf "$path_tx"
+    return 0
+  fi
+
+  if cmp -s "$target" "$path_tx/startup-next"; then
+    if [[ -f "$path_tx/startup-before" && ! -L "$path_tx/startup-before" ]]; then
+      cp -p "$path_tx/startup-before" "$target" || return 1
+    elif [[ -f "$path_tx/startup-absent" && ! -L "$path_tx/startup-absent" ]]; then
+      rm -f "$target"
+    else
+      return 1
+    fi
+    rm -rf "$path_tx"
+    return 0
+  fi
+
+  if [[ -f "$path_tx/startup-before" && ! -L "$path_tx/startup-before" ]] && cmp -s "$target" "$path_tx/startup-before"; then
+    rm -rf "$path_tx"
+    return 0
+  fi
+  if [[ -f "$path_tx/startup-absent" && ! -L "$path_tx/startup-absent" && ! -e "$target" && ! -L "$target" ]]; then
+    rm -rf "$path_tx"
+    return 0
+  fi
+  return 1
+}
+
+recover_shell_path_transaction_for_uninstall() {
+  local state="$1" path_tx target_state target
+  path_tx="$(shell_path_transaction_dir_for "$state")"
+  [[ ! -e "$path_tx" && ! -L "$path_tx" ]] && return 0
+  if [[ -e "$state" || -L "$state" ]]; then
+    target_state="$state"
+  else
+    target_state="$path_tx/state-next"
+  fi
+  target="$(validated_shell_state_target "$target_state")" || return 1
+  recover_shell_path_transaction "$target" "$state"
+}
+
+validated_shell_state_target() {
+  local state="$1" canonical_home state_shell target expected_target
+  [[ -f "$state" && ! -L "$state" ]] || return 1
+  state_shell="$(shell_state_value "$state" shell)"
+  [[ "$state_shell" == bash || "$state_shell" == zsh ]] || return 1
+  canonical_home="$(realpath -e -- "$HOME")" || return 1
+  [[ -d "$canonical_home" && ! -L "$HOME" ]] || return 1
+  expected_target="${canonical_home}/.${state_shell}rc"
+  target="$(printf '%s' "$(shell_state_value "$state" startup_file_base64)" | base64 -d 2>/dev/null || true)"
+  [[ "$target" == "$expected_target" && ! -L "$expected_target" && ( ! -e "$expected_target" || -f "$expected_target" ) && -w "$canonical_home" ]] || return 1
+  printf '%s' "$target"
 }
 
 assert_shell_setup_preflight() {
